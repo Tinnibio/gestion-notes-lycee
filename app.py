@@ -2,52 +2,32 @@ import io
 import os
 import sqlite3
 
-from flask import (
-    Flask,
-    request,
-    redirect,
-    url_for,
-    render_template_string,
-    send_file,
-    flash,
-    g,
-)
-
-from flask_sqlalchemy import SQLAlchemy
-from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    TableStyle,
-    Paragraph,
-    Spacer,
-    LongTable,
-)
 
 app = Flask(__name__)
 app.secret_key = "gestion-notes-lycee-2026"
 
 # Configuration de la base de données
-# Utilise PostgreSQL sur Render, SQLite en local
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
 if DATABASE_URL:
-    # Render (PostgreSQL)
-    # Remplace postgres:// par postgresql:// si nécessaire
     if DATABASE_URL.startswith('postgres://'):
         DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
     app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     db = SQLAlchemy(app)
     USE_SQLALCHEMY = True
+    
+    # Force SQLAlchemy à charger les modèles
+    _ = None  # Sera défini après les classes
 else:
-    # Local (SQLite)
     DOSSIER = os.path.dirname(os.path.abspath(__file__))
     DATABASE = os.path.join(DOSSIER, "gestion_notes_lycee.db")
     USE_SQLALCHEMY = False
     db = None
+
+
+ 
+
 
 
 # ==================== MODÈLES SQLALCHEMY (PostgreSQL) ====================
@@ -110,6 +90,10 @@ if USE_SQLALCHEMY:
         numero = db.Column(db.Integer, nullable=False)
         note = db.Column(db.Float, nullable=False)
         __table_args__ = (db.UniqueConstraint('etudiant_id', 'discipline_id', 'trimestre_id', 'numero', name='uq_eval_unique'),)
+
+# Force SQLAlchemy à charger les modèles
+if USE_SQLALCHEMY:
+    _ = (Annee, Classe, Etudiant, Discipline, Coefficient, Trimestre, Evaluation)
 
 
 # ==================== FONCTIONS COMMUNES ====================
