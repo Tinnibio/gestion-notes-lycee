@@ -781,12 +781,12 @@ def coefficients():
     </div>
     <div class="card"><h3>Coefficients enregistrés</h3>
     <table>
-        <tr><th>Année</th><th>Classe</th><th>Discipline</th><th>Coefficient</th><th>Action</th></tr>
+         <tr><th>Année</th><th>Classe</th><th>Discipline</th><th>Coefficient</th><th>Action</th></tr>
         {% for coef in coefficients_liste %}
         <tr>
-            <td>{{ coef.classe.annee.libelle if USE_SQLALCHEMY else coef.libelle }}</td>
-            <td>{{ coef.classe.nom if USE_SQLALCHEMY else coef.classe_nom }}</td>
-            <td>{{ coef.discipline.nom if USE_SQLALCHEMY else coef.discipline_nom }}</td>
+            <td>{{ coef['libelle'] if not USE_SQLALCHEMY else coef.classe.annee.libelle }}</td>
+            <td>{{ coef['classe_nom'] if not USE_SQLALCHEMY else coef.classe.nom }}</td>
+            <td>{{ coef['discipline_nom'] if not USE_SQLALCHEMY else coef.discipline.nom }}</td>
             <td>{{ '%.1f'|format(coef.coef) }}</td>
             <td>
                 <a class="delete-cross" href="{{ url_for('supprimer_coefficient', id=coef.id) }}" onclick="return confirm('Supprimer ce coefficient ?')">×</a>
@@ -805,6 +805,7 @@ def coefficients():
         coefficients_liste=coefficients_liste if not USE_SQLALCHEMY else coefficients_rows,
         classe_id=classe_id,
         discipline_id=discipline_id,
+        USE_SQLALCHEMY=USE_SQLALCHEMY,
     )
 
 
