@@ -297,16 +297,21 @@ def statut_moyenne(moyenne):
     return 'Ajourné' if moyenne < 12 else 'Validé'
 
 
+
+
+
+
 def coefficient_discipline_classe(classe_id, discipline_id):
     if USE_SQLALCHEMY:
         coef = Coefficient.query.filter_by(classe_id=classe_id, discipline_id=discipline_id).first()
-        return 1.0 if coef is None else coef.coef
+        return 1.0 if coef is None else float(coef.coef)
     else:
         ligne = connexion_db().execute(
             "SELECT coef FROM coefficients WHERE classe_id = ? AND discipline_id = ?",
             (classe_id, discipline_id),
         ).fetchone()
-        return 1.0 if ligne is None else ligne['coef']
+        return 1.0 if ligne is None else float(ligne['coef'])
+
 
 
 def disciplines_de_classe(classe_id):
@@ -316,7 +321,8 @@ def disciplines_de_classe(classe_id):
         resultats = []
         for cf in coeffs:
             disc = Discipline.query.get(cf.discipline_id)
-            resultats.append({'id': disc.id, 'nom': disc.nom, 'coef': cf.coef})
+            if disc:
+                resultats.append({'id': disc.id, 'nom': disc.nom, 'coef': float(cf.coef)})
         return sorted(resultats, key=lambda x: x['nom'])
     else:
         rows = connexion_db().execute(
@@ -330,21 +336,6 @@ def disciplines_de_classe(classe_id):
             (classe_id,),
         ).fetchall()
         return rows
-
-
-def moyenne_finale_eleve_trimestre(etudiant_id, classe_id, trimestre_id):
-    disciplines = disciplines_de_classe(classe_id)
-    somme_moyennes_ponderees = 0.0
-    somme_coefficients = 0.0
-    for discipline in disciplines:
-        resultat = resultat_etudiant_discipline_trimestre(etudiant_id, discipline['id'], trimestre_id)
-        if resultat['moyenne'] is None:
-            continue
-        coef = discipline['coef']
-        somme_moyennes_ponderees += resultat['moyenne'] * coef
-        somme_coefficients += coef
-    return None if somme_coefficients == 0 else somme_moyennes_ponderees / somme_coefficients
-
 
 def compter(sql, parametres=()):
     if USE_SQLALCHEMY:
