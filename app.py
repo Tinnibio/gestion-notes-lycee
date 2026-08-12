@@ -1721,16 +1721,31 @@ def pdf_annuel_eleve():
 
 # ==================== INITIALISATION ====================
 
-if __name__ == '__main__':
+
+# ==================== INITIALISATION ====================
+
+def init_db():
+    """Initialise la base de données."""
     if USE_SQLALCHEMY:
-        # Création des tables PostgreSQL
         with app.app_context():
             db.create_all()
         print("Tables PostgreSQL créées avec succès.")
     else:
-        # Initialisation SQLite
         initialiser_db()
         print("Base SQLite initialisée avec succès.")
-    
+
+# Initialiser la base au chargement du module
+init_db()
+
+# Pour le développement local uniquement
+if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)   
+    app.run(host='0.0.0.0', port=port, debug=False)
+
+
+
+
+
+
+
+
