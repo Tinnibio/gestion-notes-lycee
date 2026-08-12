@@ -3,6 +3,32 @@ import os
 import sqlite3
 
 
+from flask import (
+    Flask,
+    request,
+    redirect,
+    url_for,
+    render_template_string,
+    send_file,
+    flash,
+    g,
+)
+
+from flask_sqlalchemy import SQLAlchemy
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    TableStyle,
+    Paragraph,
+    Spacer,
+    LongTable,
+)
+
+
+
 app = Flask(__name__)
 app.secret_key = "gestion-notes-lycee-2026"
 
