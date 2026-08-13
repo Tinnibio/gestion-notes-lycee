@@ -1,221 +1,89 @@
 import io
 import os
-import sqlite3
 
-
-from flask import (
-    Flask,
-    request,
-    redirect,
-    url_for,
-    render_template_string,
-    send_file,
-    flash,
-    g,
-)
-
+from flask import Flask, request, redirect, url_for, render_template_string, send_file, flash, g
 from flask_sqlalchemy import SQLAlchemy
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    TableStyle,
-    Paragraph,
-    Spacer,
-    LongTable,
-)
-
-
+from reportlab.platypus import SimpleDocTemplate, TableStyle, Paragraph, Spacer, LongTable
 
 app = Flask(__name__)
 app.secret_key = "gestion-notes-lycee-2026"
 
-# Configuration de la base de données
+# Configuration PostgreSQL (Render)
 DATABASE_URL = os.environ.get('DATABASE_URL')
+if DATABASE_URL and DATABASE_URL.startswith('postgres://'):
+    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
 
-if DATABASE_URL:
-    if DATABASE_URL.startswith('postgres://'):
-        DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
-    app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    db = SQLAlchemy(app)
-    USE_SQLALCHEMY = True
-    
-    # Force SQLAlchemy à charger les modèles
-    _ = None  # Sera défini après les classes
-else:
-    DOSSIER = os.path.dirname(os.path.abspath(__file__))
-    DATABASE = os.path.join(DOSSIER, "gestion_notes_lycee.db")
-    USE_SQLALCHEMY = False
-    db = None
+# ==================== MODÈLES ====================
 
+class Annee(db.Model):
+    __tablename__ = 'annees'
+    id = db.Column(db.Integer, primary_key=True)
+    libelle = db.Column(db.Text, nullable=False, unique=True)
+    classes = db.relationship('Classe', backref='annee', cascade='all, delete-orphan')
+    trimestres = db.relationship('Trimestre', backref='annee', cascade='all, delete-orphan')
 
- 
+class Classe(db.Model):
+    __tablename__ = 'classes'
+    id = db.Column(db.Integer, primary_key=True)
+    annee_id = db.Column(db.Integer, db.ForeignKey('annees.id', ondelete='CASCADE'), nullable=False)
+    nom = db.Column(db.Text, nullable=False)
+    etudiants = db.relationship('Etudiant', backref='classe', cascade='all, delete-orphan')
+    coefficients = db.relationship('Coefficient', backref='classe', cascade='all, delete-orphan')
+    __table_args__ = (db.UniqueConstraint('annee_id', 'nom', name='uq_classe_annee_nom'),)
 
+class Etudiant(db.Model):
+    __tablename__ = 'etudiants'
+    id = db.Column(db.Integer, primary_key=True)
+    classe_id = db.Column(db.Integer, db.ForeignKey('classes.id', ondelete='CASCADE'), nullable=False)
+    prenom = db.Column(db.Text, nullable=False)
+    nom = db.Column(db.Text, nullable=False)
+    evaluations = db.relationship('Evaluation', backref='etudiant', cascade='all, delete-orphan')
 
+class Discipline(db.Model):
+    __tablename__ = 'disciplines'
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.Text, nullable=False, unique=True)
+    coefficients = db.relationship('Coefficient', backref='discipline', cascade='all, delete-orphan')
+    evaluations = db.relationship('Evaluation', backref='discipline', cascade='all, delete-orphan')
 
-# ==================== MODÈLES SQLALCHEMY (PostgreSQL) ====================
+class Coefficient(db.Model):
+    __tablename__ = 'coefficients'
+    id = db.Column(db.Integer, primary_key=True)
+    classe_id = db.Column(db.Integer, db.ForeignKey('classes.id', ondelete='CASCADE'), nullable=False)
+    discipline_id = db.Column(db.Integer, db.ForeignKey('disciplines.id', ondelete='CASCADE'), nullable=False)
+    coef = db.Column(db.Float, nullable=False)
+    __table_args__ = (db.UniqueConstraint('classe_id', 'discipline_id', name='uq_coef_classe_discipline'),)
 
-if USE_SQLALCHEMY:
-    class Annee(db.Model):
-        __tablename__ = 'annees'
-        id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-        libelle = db.Column(db.Text, nullable=False, unique=True)
-        classes = db.relationship('Classe', backref='annee', cascade='all, delete-orphan')
-        trimestres = db.relationship('Trimestre', backref='annee', cascade='all, delete-orphan')
+class Trimestre(db.Model):
+    __tablename__ = 'trimestres'
+    id = db.Column(db.Integer, primary_key=True)
+    annee_id = db.Column(db.Integer, db.ForeignKey('annees.id', ondelete='CASCADE'), nullable=False)
+    nom = db.Column(db.Text, nullable=False)
+    evaluations = db.relationship('Evaluation', backref='trimestre', cascade='all, delete-orphan')
+    __table_args__ = (db.UniqueConstraint('annee_id', 'nom', name='uq_trimestre_annee_nom'),)
 
-    class Classe(db.Model):
-        __tablename__ = 'classes'
-        id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-        annee_id = db.Column(db.Integer, db.ForeignKey('annees.id', ondelete='CASCADE'), nullable=False)
-        nom = db.Column(db.Text, nullable=False)
-        etudiants = db.relationship('Etudiant', backref='classe', cascade='all, delete-orphan')
-        coefficients = db.relationship('Coefficient', backref='classe', cascade='all, delete-orphan')
-        __table_args__ = (db.UniqueConstraint('annee_id', 'nom', name='uq_classe_annee_nom'),)
+class Evaluation(db.Model):
+    __tablename__ = 'evaluations'
+    id = db.Column(db.Integer, primary_key=True)
+    etudiant_id = db.Column(db.Integer, db.ForeignKey('etudiants.id', ondelete='CASCADE'), nullable=False)
+    discipline_id = db.Column(db.Integer, db.ForeignKey('disciplines.id', ondelete='CASCADE'), nullable=False)
+    trimestre_id = db.Column(db.Integer, db.ForeignKey('trimestres.id', ondelete='CASCADE'), nullable=False)
+    type = db.Column(db.Text, nullable=False)
+    numero = db.Column(db.Integer, nullable=False)
+    note = db.Column(db.Float, nullable=False)
+    __table_args__ = (db.UniqueConstraint('etudiant_id', 'discipline_id', 'trimestre_id', 'numero', name='uq_eval_unique'),)
 
-    class Etudiant(db.Model):
-        __tablename__ = 'etudiants'
-        id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-        classe_id = db.Column(db.Integer, db.ForeignKey('classes.id', ondelete='CASCADE'), nullable=False)
-        prenom = db.Column(db.Text, nullable=False)
-        nom = db.Column(db.Text, nullable=False)
-        evaluations = db.relationship('Evaluation', backref='etudiant', cascade='all, delete-orphan')
-
-    class Discipline(db.Model):
-        __tablename__ = 'disciplines'
-        id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-        nom = db.Column(db.Text, nullable=False, unique=True)
-        coefficients = db.relationship('Coefficient', backref='discipline', cascade='all, delete-orphan')
-        evaluations = db.relationship('Evaluation', backref='discipline', cascade='all, delete-orphan')
-
-    class Coefficient(db.Model):
-        __tablename__ = 'coefficients'
-        id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-        classe_id = db.Column(db.Integer, db.ForeignKey('classes.id', ondelete='CASCADE'), nullable=False)
-        discipline_id = db.Column(db.Integer, db.ForeignKey('disciplines.id', ondelete='CASCADE'), nullable=False)
-        coef = db.Column(db.Float, nullable=False)
-        __table_args__ = (db.UniqueConstraint('classe_id', 'discipline_id', name='uq_coef_classe_discipline'),)
-
-    class Trimestre(db.Model):
-        __tablename__ = 'trimestres'
-        id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-        annee_id = db.Column(db.Integer, db.ForeignKey('annees.id', ondelete='CASCADE'), nullable=False)
-        nom = db.Column(db.Text, nullable=False)
-        evaluations = db.relationship('Evaluation', backref='trimestre', cascade='all, delete-orphan')
-        __table_args__ = (db.UniqueConstraint('annee_id', 'nom', name='uq_trimestre_annee_nom'),)
-
-    class Evaluation(db.Model):
-        __tablename__ = 'evaluations'
-        id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-        etudiant_id = db.Column(db.Integer, db.ForeignKey('etudiants.id', ondelete='CASCADE'), nullable=False)
-        discipline_id = db.Column(db.Integer, db.ForeignKey('disciplines.id', ondelete='CASCADE'), nullable=False)
-        trimestre_id = db.Column(db.Integer, db.ForeignKey('trimestres.id', ondelete='CASCADE'), nullable=False)
-        type = db.Column(db.Text, nullable=False)
-        numero = db.Column(db.Integer, nullable=False)
-        note = db.Column(db.Float, nullable=False)
-        __table_args__ = (db.UniqueConstraint('etudiant_id', 'discipline_id', 'trimestre_id', 'numero', name='uq_eval_unique'),)
-
-# Force SQLAlchemy à charger les modèles
-if USE_SQLALCHEMY:
-    _ = (Annee, Classe, Etudiant, Discipline, Coefficient, Trimestre, Evaluation)
-
-
-# ==================== FONCTIONS COMMUNES ====================
-
-def connexion_db():
-    """Retourne une connexion SQLite ou None si PostgreSQL."""
-    if not USE_SQLALCHEMY:
-        conn = getattr(g, "_database", None)
-        if conn is None:
-            conn = g._database = sqlite3.connect(DATABASE)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA foreign_keys = ON")
-        return conn
-    return None
-
-
-@app.teardown_appcontext
-def fermer_db(exception=None):
-    if not USE_SQLALCHEMY:
-        conn = getattr(g, "_database", None)
-        if conn is not None:
-            conn.close()
-
-
-def initialiser_db():
-    """Initialise la base SQLite en local."""
-    if USE_SQLALCHEMY:
-        return
-    conn = sqlite3.connect(DATABASE)
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.executescript("""
-    CREATE TABLE IF NOT EXISTS annees (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        libelle TEXT NOT NULL UNIQUE
-    );
-
-    CREATE TABLE IF NOT EXISTS classes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        annee_id INTEGER NOT NULL,
-        nom TEXT NOT NULL,
-        UNIQUE(annee_id, nom),
-        FOREIGN KEY(annee_id) REFERENCES annees(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS etudiants (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        classe_id INTEGER NOT NULL,
-        prenom TEXT NOT NULL,
-        nom TEXT NOT NULL,
-        FOREIGN KEY(classe_id) REFERENCES classes(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS disciplines (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nom TEXT NOT NULL UNIQUE
-    );
-
-    CREATE TABLE IF NOT EXISTS coefficients (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        classe_id INTEGER NOT NULL,
-        discipline_id INTEGER NOT NULL,
-        coef REAL NOT NULL CHECK(coef > 0),
-        UNIQUE(classe_id, discipline_id),
-        FOREIGN KEY(classe_id) REFERENCES classes(id) ON DELETE CASCADE,
-        FOREIGN KEY(discipline_id) REFERENCES disciplines(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS trimestres (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        annee_id INTEGER NOT NULL,
-        nom TEXT NOT NULL,
-        UNIQUE(annee_id, nom),
-        FOREIGN KEY(annee_id) REFERENCES annees(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS evaluations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        etudiant_id INTEGER NOT NULL,
-        discipline_id INTEGER NOT NULL,
-        trimestre_id INTEGER NOT NULL,
-        type TEXT NOT NULL CHECK(type IN ('devoir', 'examen')),
-        numero INTEGER NOT NULL CHECK(numero BETWEEN 1 AND 4),
-        note REAL NOT NULL CHECK(note BETWEEN 0 AND 20),
-        UNIQUE(etudiant_id, discipline_id, trimestre_id, numero),
-        FOREIGN KEY(etudiant_id) REFERENCES etudiants(id) ON DELETE CASCADE,
-        FOREIGN KEY(discipline_id) REFERENCES disciplines(id) ON DELETE CASCADE,
-        FOREIGN KEY(trimestre_id) REFERENCES trimestres(id) ON DELETE CASCADE
-    );
-    """)
-    conn.commit()
-    conn.close()
-
+# ==================== FONCTIONS ====================
 
 def page(contenu, **variables):
     return render_template_string(HTML_DEBUT + contenu + HTML_FIN, **variables)
-
 
 def convertir_note(valeur):
     if valeur is None:
@@ -231,56 +99,18 @@ def convertir_note(valeur):
         return None
     return note
 
-
 def format_note(note):
     return '-' if note is None else f"{note:.2f}"
 
-
 def moyenne_devoirs(etudiant_id, discipline_id, trimestre_id):
-    if USE_SQLALCHEMY:
-        resultat = Evaluation.query.filter_by(
-            etudiant_id=etudiant_id,
-            discipline_id=discipline_id,
-            trimestre_id=trimestre_id,
-            type='devoir'
-        ).all()
-        if not resultat:
-            return None
-        return sum(r.note for r in resultat) / len(resultat)
-    else:
-        ligne = connexion_db().execute(
-            """
-            SELECT AVG(note) AS moyenne
-            FROM evaluations
-            WHERE etudiant_id = ? AND discipline_id = ? AND trimestre_id = ? AND type = 'devoir'
-            """,
-            (etudiant_id, discipline_id, trimestre_id),
-        ).fetchone()
-        return None if ligne is None else ligne['moyenne']
-
+    resultat = Evaluation.query.filter_by(etudiant_id=etudiant_id, discipline_id=discipline_id, trimestre_id=trimestre_id, type='devoir').all()
+    if not resultat:
+        return None
+    return sum(r.note for r in resultat) / len(resultat)
 
 def note_examen(etudiant_id, discipline_id, trimestre_id):
-    if USE_SQLALCHEMY:
-        resultat = Evaluation.query.filter_by(
-            etudiant_id=etudiant_id,
-            discipline_id=discipline_id,
-            trimestre_id=trimestre_id,
-            type='examen',
-            numero=4
-        ).first()
-        return None if resultat is None else resultat.note
-    else:
-        ligne = connexion_db().execute(
-            """
-            SELECT note
-            FROM evaluations
-            WHERE etudiant_id = ? AND discipline_id = ? AND trimestre_id = ? AND type = 'examen' AND numero = 4
-            LIMIT 1
-            """,
-            (etudiant_id, discipline_id, trimestre_id),
-        ).fetchone()
-        return None if ligne is None else ligne['note']
-
+    resultat = Evaluation.query.filter_by(etudiant_id=etudiant_id, discipline_id=discipline_id, trimestre_id=trimestre_id, type='examen', numero=4).first()
+    return None if resultat is None else resultat.note
 
 def resultat_etudiant_discipline_trimestre(etudiant_id, discipline_id, trimestre_id):
     n_classe = moyenne_devoirs(etudiant_id, discipline_id, trimestre_id)
@@ -290,62 +120,41 @@ def resultat_etudiant_discipline_trimestre(etudiant_id, discipline_id, trimestre
         moyenne = (n_classe + 2 * n_exam) / 3
     return {'n_classe': n_classe, 'n_exam': n_exam, 'moyenne': moyenne, 'statut': statut_moyenne(moyenne)}
 
-
 def statut_moyenne(moyenne):
     if moyenne is None:
         return 'Incomplet'
     return 'Ajourné' if moyenne < 12 else 'Validé'
 
-
-
-
-
-
 def coefficient_discipline_classe(classe_id, discipline_id):
-    if USE_SQLALCHEMY:
-        coef = Coefficient.query.filter_by(classe_id=classe_id, discipline_id=discipline_id).first()
-        return 1.0 if coef is None else float(coef.coef)
-    else:
-        ligne = connexion_db().execute(
-            "SELECT coef FROM coefficients WHERE classe_id = ? AND discipline_id = ?",
-            (classe_id, discipline_id),
-        ).fetchone()
-        return 1.0 if ligne is None else float(ligne['coef'])
-
-
+    coef = Coefficient.query.filter_by(classe_id=classe_id, discipline_id=discipline_id).first()
+    return 1.0 if coef is None else float(coef.coef)
 
 def disciplines_de_classe(classe_id):
-    """Renvoie la liste des disciplines enseignées dans une classe (avec coef)."""
-    if USE_SQLALCHEMY:
-        coeffs = Coefficient.query.filter_by(classe_id=classe_id).all()
-        resultats = []
-        for cf in coeffs:
-            disc = Discipline.query.get(cf.discipline_id)
-            if disc:
-                resultats.append({'id': disc.id, 'nom': disc.nom, 'coef': float(cf.coef)})
-        return sorted(resultats, key=lambda x: x['nom'])
-    else:
-        rows = connexion_db().execute(
-            """
-            SELECT d.id, d.nom, cf.coef
-            FROM disciplines d
-            JOIN coefficients cf ON cf.discipline_id = d.id
-            WHERE cf.classe_id = ?
-            ORDER BY d.nom
-            """,
-            (classe_id,),
-        ).fetchall()
-        return rows
+    coeffs = Coefficient.query.filter_by(classe_id=classe_id).all()
+    resultats = []
+    for cf in coeffs:
+        disc = Discipline.query.get(cf.discipline_id)
+        if disc:
+            resultats.append({'id': disc.id, 'nom': disc.nom, 'coef': float(cf.coef)})
+    return sorted(resultats, key=lambda x: x['nom'])
+
+def moyenne_finale_eleve_trimestre(etudiant_id, classe_id, trimestre_id):
+    disciplines = disciplines_de_classe(classe_id)
+    somme_moyennes_ponderees = 0.0
+    somme_coefficients = 0.0
+    for discipline in disciplines:
+        resultat = resultat_etudiant_discipline_trimestre(etudiant_id, discipline['id'], trimestre_id)
+        if resultat['moyenne'] is None:
+            continue
+        coef = discipline['coef']
+        somme_moyennes_ponderees += resultat['moyenne'] * coef
+        somme_coefficients += coef
+    return None if somme_coefficients == 0 else somme_moyennes_ponderees / somme_coefficients
 
 def compter(sql, parametres=()):
-    if USE_SQLALCHEMY:
-        from sqlalchemy import text
-        resultat = db.session.execute(text(sql), parametres).fetchone()
-        return resultat[0]
-    else:
-        ligne = connexion_db().execute(sql, parametres).fetchone()
-        return ligne['total']
-
+    from sqlalchemy import text
+    resultat = db.session.execute(text(sql), parametres).fetchone()
+    return resultat[0]
 
 HTML_DEBUT = """
 <!doctype html>
@@ -408,16 +217,17 @@ th{background:#dce9f7}
 
 HTML_FIN = "</main></body></html>"
 
+# ==================== ROUTES ====================
 
 @app.route('/')
 def accueil():
     stats = {
-        'annees': compter('SELECT COUNT(*) AS total FROM annees'),
-        'classes': compter('SELECT COUNT(*) AS total FROM classes'),
-        'etudiants': compter('SELECT COUNT(*) AS total FROM etudiants'),
-        'disciplines': compter('SELECT COUNT(*) AS total FROM disciplines'),
-        'trimestres': compter('SELECT COUNT(*) AS total FROM trimestres'),
-        'evaluations': compter('SELECT COUNT(*) AS total FROM evaluations'),
+        'annees': compter('SELECT COUNT(*) FROM annees'),
+        'classes': compter('SELECT COUNT(*) FROM classes'),
+        'etudiants': compter('SELECT COUNT(*) FROM etudiants'),
+        'disciplines': compter('SELECT COUNT(*) FROM disciplines'),
+        'trimestres': compter('SELECT COUNT(*) FROM trimestres'),
+        'evaluations': compter('SELECT COUNT(*) FROM evaluations'),
     }
     contenu = """
     <div class="card"><h2>Tableau de bord</h2><div class="form-grid">
@@ -431,921 +241,375 @@ def accueil():
     """
     return page(contenu, stats=stats)
 
-
 @app.route('/annees', methods=['GET', 'POST'])
 def annees():
-    if USE_SQLALCHEMY:
-        db_session = db.session
-        if request.method == 'POST':
-            libelle = request.form.get('libelle', '').strip()
-            if not libelle:
-                flash('Veuillez saisir une année.')
+    if request.method == 'POST':
+        libelle = request.form.get('libelle', '').strip()
+        if not libelle:
+            flash('Veuillez saisir une année.')
+        else:
+            existing = Annee.query.filter_by(libelle=libelle).first()
+            if existing:
+                flash('Cette année existe déjà.')
             else:
-                existing = Annee.query.filter_by(libelle=libelle).first()
-                if existing:
-                    flash('Cette année existe déjà.')
-                else:
-                    annee = Annee(libelle=libelle)
-                    db_session.add(annee)
-                    db_session.commit()
-                    flash('Année ajoutée.')
-            return redirect(url_for('annees'))
-        liste = Annee.query.order_by(Annee.libelle.desc()).all()
-    else:
-        db_conn = connexion_db()
-        if request.method == 'POST':
-            libelle = request.form.get('libelle', '').strip()
-            if not libelle:
-                flash('Veuillez saisir une année.')
-            else:
-                try:
-                    db_conn.execute('INSERT INTO annees(libelle) VALUES (?)', (libelle,))
-                    db_conn.commit()
-                    flash('Année ajoutée.')
-                except sqlite3.IntegrityError:
-                    flash('Cette année existe déjà.')
-            return redirect(url_for('annees'))
-        liste = db_conn.execute('SELECT * FROM annees ORDER BY libelle DESC').fetchall()
-    
+                annee = Annee(libelle=libelle)
+                db.session.add(annee)
+                db.session.commit()
+                flash('Année ajoutée.')
+        return redirect(url_for('annees'))
+    liste = Annee.query.order_by(Annee.libelle.desc()).all()
     contenu = """
     <div class="card"><h2>Années scolaires</h2>
     <form method="post" class="form-grid">
-        <div>
-            <label>Année</label>
-            <input name="libelle" placeholder="2026-2027" required>
-        </div>
+        <div><label>Année</label><input name="libelle" placeholder="2026-2027" required></div>
         <button class="btn btn-success">Ajouter</button>
     </form>
     </div>
     <div class="card"><h3>Liste des années</h3>
-    <table>
-        <tr><th>Année</th><th>Action</th></tr>
-        {% for annee in liste %}
-        <tr>
-            <td>{{ annee.libelle }}</td>
-            <td>
-                <a class="delete-cross" href="{{ url_for('supprimer_annee', id=annee.id) }}" onclick="return confirm('Supprimer cette année et toutes ses données ?')">×</a>
-            </td>
-        </tr>
-        {% else %}
-        <tr><td colspan="2">Aucune année enregistrée.</td></tr>
-        {% endfor %}
-    </table>
-    </div>
+    <table><tr><th>Année</th><th>Action</th></tr>
+    {% for annee in liste %}
+    <tr><td>{{ annee.libelle }}</td><td><a class="delete-cross" href="{{ url_for('supprimer_annee', id=annee.id) }}" onclick="return confirm('Supprimer ?')">×</a></td></tr>
+    {% else %}<tr><td colspan="2">Aucune année.</td></tr>{% endfor %}
+    </table></div>
     """
     return page(contenu, liste=liste)
 
-
 @app.route('/annees/supprimer/<int:id>')
 def supprimer_annee(id):
-    if USE_SQLALCHEMY:
-        annee = Annee.query.get_or_404(id)
-        db.session.delete(annee)
-        db.session.commit()
-    else:
-        db = connexion_db()
-        db.execute('DELETE FROM annees WHERE id = ?', (id,))
-        db.commit()
+    annee = Annee.query.get_or_404(id)
+    db.session.delete(annee)
+    db.session.commit()
     flash('Année supprimée.')
     return redirect(url_for('annees'))
 
-
 @app.route('/classes', methods=['GET', 'POST'])
 def classes():
-    db_conn = connexion_db() if not USE_SQLALCHEMY else None
-    db_session = db.session if USE_SQLALCHEMY else None
-    
     annee_id = request.form.get('annee_id') if request.method == 'POST' else request.args.get('annee_id', '')
-
     if request.method == 'POST':
         nom = request.form.get('nom', '').strip()
         if not annee_id or not nom:
             flash('Veuillez choisir une année et saisir une classe.')
         else:
-            if USE_SQLALCHEMY:
-                existing = Classe.query.filter_by(annee_id=int(annee_id), nom=nom).first()
-                if existing:
-                    flash('Cette classe existe déjà dans cette année.')
-                else:
-                    classe = Classe(annee_id=int(annee_id), nom=nom)
-                    db_session.add(classe)
-                    db_session.commit()
-                    flash('Classe ajoutée.')
+            existing = Classe.query.filter_by(annee_id=int(annee_id), nom=nom).first()
+            if existing:
+                flash('Cette classe existe déjà.')
             else:
-                try:
-                    db_conn.execute('INSERT INTO classes(annee_id, nom) VALUES (?, ?)', (annee_id, nom))
-                    db_conn.commit()
-                    flash('Classe ajoutée.')
-                except sqlite3.IntegrityError:
-                    flash('Cette classe existe déjà dans cette année.')
+                classe = Classe(annee_id=int(annee_id), nom=nom)
+                db.session.add(classe)
+                db.session.commit()
+                flash('Classe ajoutée.')
         return redirect(url_for('classes', annee_id=annee_id))
-
-    if USE_SQLALCHEMY:
-        annees_liste = Annee.query.order_by(Annee.libelle.desc()).all()
-        classes_rows = Classe.query.join(Annee).order_by(Annee.libelle.desc(), Classe.nom).all()
-    else:
-        annees_liste = db_conn.execute('SELECT * FROM annees ORDER BY libelle DESC').fetchall()
-        classes_rows = db_conn.execute(
-            'SELECT c.id, c.nom, c.annee_id, a.libelle FROM classes c JOIN annees a ON a.id = c.annee_id ORDER BY a.libelle DESC, c.nom'
-        ).fetchall()
-    
+    annees_liste = Annee.query.order_by(Annee.libelle.desc()).all()
+    classes_rows = Classe.query.join(Annee).order_by(Annee.libelle.desc(), Classe.nom).all()
     classes_par_annee = {}
-    for ligne in classes_rows:
-        annee_libelle = ligne['libelle'] if not USE_SQLALCHEMY else ligne.annee.libelle
+    for classe in classes_rows:
+        annee_libelle = classe.annee.libelle
         if annee_libelle not in classes_par_annee:
-            classes_par_annee[annee_libelle] = {
-                'annee_id': ligne['annee_id'] if not USE_SQLALCHEMY else ligne.annee_id,
-                'classes': []
-            }
-        classes_par_annee[annee_libelle]['classes'].append({
-            'id': ligne['id'] if not USE_SQLALCHEMY else ligne.id,
-            'nom': ligne['nom'] if not USE_SQLALCHEMY else ligne.nom
-        })
-
+            classes_par_annee[annee_libelle] = {'annee_id': classe.annee_id, 'classes': []}
+        classes_par_annee[annee_libelle]['classes'].append({'id': classe.id, 'nom': classe.nom})
     contenu = """
     <div class="card"><h2>Classes</h2>
     <form method="post" class="form-grid">
-        <div>
-            <label>Année</label>
-            <select name="annee_id" required>
-                <option value="">Choisir</option>
-                {% for annee in annees_liste %}
-                <option value="{{ annee.id }}" {% if annee_id|string == annee.id|string %}selected{% endif %}>
-                    {{ annee.libelle }}
-                </option>
-                {% endfor %}
-            </select>
-        </div>
-        <div>
-            <label>Nom de la classe</label>
-            <input name="nom" placeholder="Classe A" required>
-        </div>
+        <div><label>Année</label>
+        <select name="annee_id" required><option value="">Choisir</option>
+        {% for annee in annees_liste %}<option value="{{ annee.id }}">{{ annee.libelle }}</option>{% endfor %}
+        </select></div>
+        <div><label>Nom de la classe</label><input name="nom" placeholder="Classe A" required></div>
         <button class="btn btn-success">Ajouter</button>
-    </form>
-    </div>
+    </form></div>
     {% for annee_libelle, donnees in classes_par_annee.items() %}
-    <div class="card">
-        <div class="factor-header">
-            <span class="factor-label">Année :</span>
-            <span class="factor-value">{{ annee_libelle }}</span>
-        </div>
-        <table>
-            <tr><th>Classe</th><th>Action</th></tr>
-            {% for classe in donnees.classes %}
-            <tr>
-                <td>{{ classe.nom }}</td>
-                <td>
-                    <a class="delete-cross" href="{{ url_for('supprimer_classe', id=classe.id) }}" onclick="return confirm('Supprimer cette classe et ses étudiants ?')">×</a>
-                </td>
-            </tr>
-            {% else %}
-            <tr><td colspan="2">Aucune classe dans cette année.</td></tr>
-            {% endfor %}
-        </table>
-    </div>
-    {% else %}
-    <div class="card"><div class="alert">Aucune classe enregistrée.</div></div>
-    {% endfor %}
+    <div class="card"><div class="factor-header"><span class="factor-label">Année :</span><span class="factor-value">{{ annee_libelle }}</span></div>
+    <table><tr><th>Classe</th><th>Action</th></tr>
+    {% for classe in donnees.classes %}
+    <tr><td>{{ classe.nom }}</td><td><a class="delete-cross" href="{{ url_for('supprimer_classe', id=classe.id) }}" onclick="return confirm('Supprimer ?')">×</a></td></tr>
+    {% else %}<tr><td colspan="2">Aucune classe.</td></tr>{% endfor %}
+    </table></div>{% else %}<div class="card"><div class="alert">Aucune classe.</div></div>{% endfor %}
     """
-    return page(contenu, annees_liste=annees_liste, classes_par_annee=classes_par_annee, annee_id=annee_id)
-
+    return page(contenu, annees_liste=annees_liste, classes_par_annee=classes_par_annee)
 
 @app.route('/classes/supprimer/<int:id>')
 def supprimer_classe(id):
-    if USE_SQLALCHEMY:
-        classe = Classe.query.get_or_404(id)
-        db.session.delete(classe)
-        db.session.commit()
-    else:
-        db = connexion_db()
-        db.execute('DELETE FROM classes WHERE id = ?', (id,))
-        db.commit()
+    classe = Classe.query.get_or_404(id)
+    db.session.delete(classe)
+    db.session.commit()
     flash('Classe supprimée.')
     return redirect(url_for('classes'))
 
-
 @app.route('/disciplines', methods=['GET', 'POST'])
 def disciplines():
-    if USE_SQLALCHEMY:
-        if request.method == 'POST':
-            nom = request.form.get('nom', '').strip()
-            if not nom:
-                flash('Veuillez saisir une discipline.')
+    if request.method == 'POST':
+        nom = request.form.get('nom', '').strip()
+        if not nom:
+            flash('Veuillez saisir une discipline.')
+        else:
+            existing = Discipline.query.filter_by(nom=nom).first()
+            if existing:
+                flash('Cette discipline existe déjà.')
             else:
-                existing = Discipline.query.filter_by(nom=nom).first()
-                if existing:
-                    flash('Cette discipline existe déjà.')
-                else:
-                    discipline = Discipline(nom=nom)
-                    db.session.add(discipline)
-                    db.session.commit()
-                    flash('Discipline ajoutée.')
-            return redirect(url_for('disciplines'))
-        liste = Discipline.query.order_by(Discipline.nom).all()
-    else:
-        db = connexion_db()
-        if request.method == 'POST':
-            nom = request.form.get('nom', '').strip()
-            if not nom:
-                flash('Veuillez saisir une discipline.')
-            else:
-                try:
-                    db.execute('INSERT INTO disciplines(nom) VALUES (?)', (nom,))
-                    db.commit()
-                    flash('Discipline ajoutée.')
-                except sqlite3.IntegrityError:
-                    flash('Cette discipline existe déjà.')
-            return redirect(url_for('disciplines'))
-        liste = db.execute('SELECT * FROM disciplines ORDER BY nom').fetchall()
-    
+                discipline = Discipline(nom=nom)
+                db.session.add(discipline)
+                db.session.commit()
+                flash('Discipline ajoutée.')
+        return redirect(url_for('disciplines'))
+    liste = Discipline.query.order_by(Discipline.nom).all()
     contenu = """
     <div class="card"><h2>Disciplines</h2>
     <form method="post" class="form-grid">
-        <div>
-            <label>Nom de la discipline</label>
-            <input name="nom" placeholder="Mathématiques" required>
-        </div>
+        <div><label>Nom de la discipline</label><input name="nom" placeholder="Mathématiques" required></div>
         <button class="btn btn-success">Ajouter</button>
-    </form>
-    </div>
-    <div class="card"><h3>Disciplines disponibles</h3>
-    <table>
-        <tr><th>Discipline</th><th>Action</th></tr>
-        {% for discipline in liste %}
-        <tr>
-            <td>{{ discipline.nom }}</td>
-            <td>
-                <a class="delete-cross" href="{{ url_for('supprimer_discipline', id=discipline.id) }}" onclick="return confirm('Supprimer cette discipline et ses coefficients ?')">×</a>
-            </td>
-        </tr>
-        {% else %}
-        <tr><td colspan="2">Aucune discipline enregistrée.</td></tr>
-        {% endfor %}
-    </table>
-    </div>
+    </form></div>
+    <div class="card"><h3>Disciplines</h3>
+    <table><tr><th>Discipline</th><th>Action</th></tr>
+    {% for discipline in liste %}
+    <tr><td>{{ discipline.nom }}</td><td><a class="delete-cross" href="{{ url_for('supprimer_discipline', id=discipline.id) }}" onclick="return confirm('Supprimer ?')">×</a></td></tr>
+    {% else %}<tr><td colspan="2">Aucune discipline.</td></tr>{% endfor %}
+    </table></div>
     """
     return page(contenu, liste=liste)
 
-
 @app.route('/disciplines/supprimer/<int:id>')
 def supprimer_discipline(id):
-    if USE_SQLALCHEMY:
-        discipline = Discipline.query.get_or_404(id)
-        db.session.delete(discipline)
-        db.session.commit()
-    else:
-        db = connexion_db()
-        db.execute('DELETE FROM disciplines WHERE id = ?', (id,))
-        db.commit()
+    discipline = Discipline.query.get_or_404(id)
+    db.session.delete(discipline)
+    db.session.commit()
     flash('Discipline supprimée.')
     return redirect(url_for('disciplines'))
 
-
 @app.route('/coefficients', methods=['GET', 'POST'])
 def coefficients():
-    db_conn = connexion_db() if not USE_SQLALCHEMY else None
-    db_session = db.session if USE_SQLALCHEMY else None
-    
     classe_id = request.form.get('classe_id') if request.method == 'POST' else request.args.get('classe_id', '')
     discipline_id = request.form.get('discipline_id') if request.method == 'POST' else request.args.get('discipline_id', '')
-
     if request.method == 'POST':
         coef_val = convertir_note(request.form.get('coef'))
         if not classe_id or not discipline_id or coef_val is None:
             flash('Veuillez remplir tous les champs.')
         else:
-            if USE_SQLALCHEMY:
-                existing = Coefficient.query.filter_by(classe_id=int(classe_id), discipline_id=int(discipline_id)).first()
-                if existing:
-                    flash('Ce coefficient existe déjà pour cette classe et cette discipline.')
-                else:
-                    coef = Coefficient(classe_id=int(classe_id), discipline_id=int(discipline_id), coef=coef_val)
-                    db_session.add(coef)
-                    db_session.commit()
-                    flash('Coefficient enregistré.')
+            existing = Coefficient.query.filter_by(classe_id=int(classe_id), discipline_id=int(discipline_id)).first()
+            if existing:
+                flash('Ce coefficient existe déjà.')
             else:
-                try:
-                    db_conn.execute('INSERT INTO coefficients(classe_id, discipline_id, coef) VALUES (?, ?, ?)', (classe_id, discipline_id, coef_val))
-                    db_conn.commit()
-                    flash('Coefficient enregistré.')
-                except sqlite3.IntegrityError:
-                    flash('Ce coefficient existe déjà pour cette classe et cette discipline.')
+                coef = Coefficient(classe_id=int(classe_id), discipline_id=int(discipline_id), coef=coef_val)
+                db.session.add(coef)
+                db.session.commit()
+                flash('Coefficient enregistré.')
         return redirect(url_for('coefficients', classe_id=classe_id, discipline_id=discipline_id))
-
-    if USE_SQLALCHEMY:
-        classes_liste = Classe.query.join(Annee).order_by(Annee.libelle.desc(), Classe.nom).all()
-        disciplines_liste = Discipline.query.order_by(Discipline.nom).all()
-        coefficients_rows = Coefficient.query.join(Classe).join(Annee).join(Discipline).order_by(
-            Annee.libelle.desc(), Classe.nom, Discipline.nom
-        ).all()
-    else:
-        classes_liste = db_conn.execute(
-            'SELECT c.id, c.nom, a.libelle FROM classes c JOIN annees a ON a.id = c.annee_id ORDER BY a.libelle DESC, c.nom'
-        ).fetchall()
-        disciplines_liste = db_conn.execute('SELECT * FROM disciplines ORDER BY nom').fetchall()
-        coefficients_liste = db_conn.execute(
-            'SELECT cf.id, cf.coef, c.nom AS classe_nom, a.libelle, d.nom AS discipline_nom FROM coefficients cf JOIN classes c ON c.id = cf.classe_id JOIN annees a ON a.id = c.annee_id JOIN disciplines d ON d.id = cf.discipline_id ORDER BY a.libelle DESC, c.nom, d.nom'
-        ).fetchall()
-
+    classes_liste = Classe.query.join(Annee).order_by(Annee.libelle.desc(), Classe.nom).all()
+    disciplines_liste = Discipline.query.order_by(Discipline.nom).all()
+    coefficients_rows = Coefficient.query.join(Classe).join(Annee).join(Discipline).order_by(Annee.libelle.desc(), Classe.nom, Discipline.nom).all()
     contenu = """
-    <div class="card"><h2>Coefficients par classe et discipline</h2>
+    <div class="card"><h2>Coefficients</h2>
     <form method="post" class="form-grid">
-        <div>
-            <label>Classe</label>
-            <select name="classe_id" required>
-                <option value="">Choisir</option>
-                {% for classe in classes_liste %}
-                <option value="{{ classe.id }}" {% if classe_id|string == classe.id|string %}selected{% endif %}>
-                    {{ classe.annee.libelle }} - {{ classe.nom }}
-                </option>
-                {% endfor %}
-            </select>
-        </div>
-        <div>
-            <label>Discipline</label>
-            <select name="discipline_id" required>
-                <option value="">Choisir</option>
-                {% for discipline in disciplines_liste %}
-                <option value="{{ discipline.id }}" {% if discipline_id|string == discipline.id|string %}selected{% endif %}>
-                    {{ discipline.nom }}
-                </option>
-                {% endfor %}
-            </select>
-        </div>
-        <div>
-            <label>Coefficient</label>
-            <input name="coef" type="number" min="0.5" max="10" step="0.5" placeholder="2" required>
-        </div>
+        <div><label>Classe</label><select name="classe_id" required>
+        <option value="">Choisir</option>{% for c in classes_liste %}<option value="{{ c.id }}">{{ c.annee.libelle }} - {{ c.nom }}</option>{% endfor %}
+        </select></div>
+        <div><label>Discipline</label><select name="discipline_id" required>
+        <option value="">Choisir</option>{% for d in disciplines_liste %}<option value="{{ d.id }}">{{ d.nom }}</option>{% endfor %}
+        </select></div>
+        <div><label>Coefficient</label><input name="coef" type="number" min="0.5" max="10" step="0.5" placeholder="2" required></div>
         <button class="btn btn-success">Enregistrer</button>
-    </form>
-    </div>
-    <div class="card"><h3>Coefficients enregistrés</h3>
-    <table>
-         <tr><th>Année</th><th>Classe</th><th>Discipline</th><th>Coefficient</th><th>Action</th></tr>
-        {% for coef in coefficients_liste %}
-        <tr>
-            <td>{{ coef['libelle'] if not USE_SQLALCHEMY else coef.classe.annee.libelle }}</td>
-            <td>{{ coef['classe_nom'] if not USE_SQLALCHEMY else coef.classe.nom }}</td>
-            <td>{{ coef['discipline_nom'] if not USE_SQLALCHEMY else coef.discipline.nom }}</td>
-            <td>{{ '%.1f'|format(coef.coef) }}</td>
-            <td>
-                <a class="delete-cross" href="{{ url_for('supprimer_coefficient', id=coef.id) }}" onclick="return confirm('Supprimer ce coefficient ?')">×</a>
-            </td>
-        </tr>
-        {% else %}
-        <tr><td colspan="5">Aucun coefficient enregistré.</td></tr>
-        {% endfor %}
-    </table>
-    </div>
+    </form></div>
+    <div class="card"><h3>Coefficients</h3>
+    <table><tr><th>Année</th><th>Classe</th><th>Discipline</th><th>Coefficient</th><th>Action</th></tr>
+    {% for coef in coefficients_rows %}
+    <tr><td>{{ coef.classe.annee.libelle }}</td><td>{{ coef.classe.nom }}</td><td>{{ coef.discipline.nom }}</td><td>{{ '%.1f'|format(coef.coef) }}</td>
+    <td><a class="delete-cross" href="{{ url_for('supprimer_coefficient', id=coef.id) }}" onclick="return confirm('Supprimer ?')">×</a></td></tr>
+    {% else %}<tr><td colspan="5">Aucun coefficient.</td></tr>{% endfor %}
+    </table></div>
     """
-    return page(
-        contenu,
-        classes_liste=classes_liste,
-        disciplines_liste=disciplines_liste,
-        coefficients_liste=coefficients_liste if not USE_SQLALCHEMY else coefficients_rows,
-        classe_id=classe_id,
-        discipline_id=discipline_id,
-        USE_SQLALCHEMY=USE_SQLALCHEMY,
-    )
-
+    return page(contenu, classes_liste=classes_liste, disciplines_liste=disciplines_liste, coefficients_rows=coefficients_rows)
 
 @app.route('/coefficients/supprimer/<int:id>')
 def supprimer_coefficient(id):
-    if USE_SQLALCHEMY:
-        coef = Coefficient.query.get_or_404(id)
-        db.session.delete(coef)
-        db.session.commit()
-    else:
-        db = connexion_db()
-        db.execute('DELETE FROM coefficients WHERE id = ?', (id,))
-        db.commit()
+    coef = Coefficient.query.get_or_404(id)
+    db.session.delete(coef)
+    db.session.commit()
     flash('Coefficient supprimé.')
     return redirect(url_for('coefficients'))
 
-
 @app.route('/trimestres', methods=['GET', 'POST'])
 def trimestres():
-    db_conn = connexion_db() if not USE_SQLALCHEMY else None
-    db_session = db.session if USE_SQLALCHEMY else None
-    
     annee_id = request.form.get('annee_id') if request.method == 'POST' else request.args.get('annee_id', '')
-
     if request.method == 'POST':
         nom = request.form.get('nom', '').strip()
         if not annee_id or not nom:
             flash('Veuillez choisir une année et saisir un trimestre.')
         else:
-            if USE_SQLALCHEMY:
-                existing = Trimestre.query.filter_by(annee_id=int(annee_id), nom=nom).first()
-                if existing:
-                    flash('Ce trimestre existe déjà dans cette année.')
-                else:
-                    trimestre = Trimestre(annee_id=int(annee_id), nom=nom)
-                    db_session.add(trimestre)
-                    db_session.commit()
-                    flash('Trimestre ajouté.')
+            existing = Trimestre.query.filter_by(annee_id=int(annee_id), nom=nom).first()
+            if existing:
+                flash('Ce trimestre existe déjà.')
             else:
-                try:
-                    db_conn.execute('INSERT INTO trimestres(annee_id, nom) VALUES (?, ?)', (annee_id, nom))
-                    db_conn.commit()
-                    flash('Trimestre ajouté.')
-                except sqlite3.IntegrityError:
-                    flash('Ce trimestre existe déjà dans cette année.')
+                trimestre = Trimestre(annee_id=int(annee_id), nom=nom)
+                db.session.add(trimestre)
+                db.session.commit()
+                flash('Trimestre ajouté.')
         return redirect(url_for('trimestres', annee_id=annee_id))
-
-    if USE_SQLALCHEMY:
-        annees_liste = Annee.query.order_by(Annee.libelle.desc()).all()
-        trimestres_rows = Trimestre.query.join(Annee).order_by(Annee.libelle.desc(), Trimestre.nom).all()
-    else:
-        annees_liste = db_conn.execute('SELECT * FROM annees ORDER BY libelle DESC').fetchall()
-        trimestres_rows = db_conn.execute(
-            'SELECT t.id, t.nom, t.annee_id, a.libelle FROM trimestres t JOIN annees a ON a.id = t.annee_id ORDER BY a.libelle DESC, t.nom'
-        ).fetchall()
-    
+    annees_liste = Annee.query.order_by(Annee.libelle.desc()).all()
+    trimestres_rows = Trimestre.query.join(Annee).order_by(Annee.libelle.desc(), Trimestre.nom).all()
     trimestres_par_annee = {}
-    for ligne in trimestres_rows:
-        annee_libelle = ligne['libelle'] if not USE_SQLALCHEMY else ligne.annee.libelle
-        if annee_libelle not in trimestres_par_annee:
-            trimestres_par_annee[annee_libelle] = {
-                'annee_id': ligne['annee_id'] if not USE_SQLALCHEMY else ligne.annee_id,
-                'trimestres': []
-            }
-        trimestres_par_annee[annee_libelle]['trimestres'].append({
-            'id': ligne['id'] if not USE_SQLALCHEMY else ligne.id,
-            'nom': ligne['nom'] if not USE_SQLALCHEMY else ligne.nom
-        })
-
+    for t in trimestres_rows:
+        if t.annee.libelle not in trimestres_par_annee:
+            trimestres_par_annee[t.annee.libelle] = {'annee_id': t.annee_id, 'trimestres': []}
+        trimestres_par_annee[t.annee.libelle]['trimestres'].append({'id': t.id, 'nom': t.nom})
     contenu = """
     <div class="card"><h2>Trimestres</h2>
     <form method="post" class="form-grid">
-        <div>
-            <label>Année</label>
-            <select name="annee_id" required>
-                <option value="">Choisir</option>
-                {% for annee in annees_liste %}
-                <option value="{{ annee.id }}" {% if annee_id|string == annee.id|string %}selected{% endif %}>
-                    {{ annee.libelle }}
-                </option>
-                {% endfor %}
-            </select>
-        </div>
-        <div>
-            <label>Nom du trimestre</label>
-            <input name="nom" placeholder="Trimestre 1" required>
-        </div>
+        <div><label>Année</label><select name="annee_id" required><option value="">Choisir</option>
+        {% for annee in annees_liste %}<option value="{{ annee.id }}">{{ annee.libelle }}</option>{% endfor %}</select></div>
+        <div><label>Nom du trimestre</label><input name="nom" placeholder="Trimestre 1" required></div>
         <button class="btn btn-success">Ajouter</button>
-    </form>
-    </div>
+    </form></div>
     {% for annee_libelle, donnees in trimestres_par_annee.items() %}
-    <div class="card">
-        <div class="factor-header">
-            <span class="factor-label">Année :</span>
-            <span class="factor-value">{{ annee_libelle }}</span>
-        </div>
-        <table>
-            <tr><th>Trimestre</th><th>Action</th></tr>
-            {% for trimestre in donnees.trimestres %}
-            <tr>
-                <td>{{ trimestre.nom }}</td>
-                <td>
-                    <a class="delete-cross" href="{{ url_for('supprimer_trimestre', id=trimestre.id) }}" onclick="return confirm('Supprimer ce trimestre et ses évaluations ?')">×</a>
-                </td>
-            </tr>
-            {% else %}
-            <tr><td colspan="2">Aucun trimestre dans cette année.</td></tr>
-            {% endfor %}
-        </table>
-    </div>
-    {% else %}
-    <div class="card"><div class="alert">Aucun trimestre enregistré.</div></div>
-    {% endfor %}
+    <div class="card"><div class="factor-header"><span class="factor-label">Année :</span><span class="factor-value">{{ annee_libelle }}</span></div>
+    <table><tr><th>Trimestre</th><th>Action</th></tr>
+    {% for t in donnees.trimestres %}
+    <tr><td>{{ t.nom }}</td><td><a class="delete-cross" href="{{ url_for('supprimer_trimestre', id=t.id) }}" onclick="return confirm('Supprimer ?')">×</a></td></tr>
+    {% else %}<tr><td colspan="2">Aucun trimestre.</td></tr>{% endfor %}
+    </table></div>{% else %}<div class="card"><div class="alert">Aucun trimestre.</div></div>{% endfor %}
     """
-    return page(
-        contenu,
-        annees_liste=annees_liste,
-        trimestres_par_annee=trimestres_par_annee,
-        annee_id=annee_id,
-    )
-
+    return page(contenu, annees_liste=annees_liste, trimestres_par_annee=trimestres_par_annee)
 
 @app.route('/trimestres/supprimer/<int:id>')
 def supprimer_trimestre(id):
-    if USE_SQLALCHEMY:
-        trimestre = Trimestre.query.get_or_404(id)
-        db.session.delete(trimestre)
-        db.session.commit()
-    else:
-        db = connexion_db()
-        db.execute('DELETE FROM trimestres WHERE id = ?', (id,))
-        db.commit()
+    t = Trimestre.query.get_or_404(id)
+    db.session.delete(t)
+    db.session.commit()
     flash('Trimestre supprimé.')
     return redirect(url_for('trimestres'))
 
-
 @app.route('/etudiants', methods=['GET', 'POST'])
 def etudiants():
-    db_conn = connexion_db() if not USE_SQLALCHEMY else None
-    db_session = db.session if USE_SQLALCHEMY else None
-    
     classe_id = request.form.get('classe_id') if request.method == 'POST' else request.args.get('classe_id', '')
-
     if request.method == 'POST':
         prenom = request.form.get('prenom', '').strip()
         nom = request.form.get('nom', '').strip()
         if not classe_id or not prenom or not nom:
             flash('Veuillez remplir tous les champs.')
         else:
-            if USE_SQLALCHEMY:
-                etudiant = Etudiant(classe_id=int(classe_id), prenom=prenom, nom=nom)
-                db_session.add(etudiant)
-                db_session.commit()
-                flash('Étudiant ajouté.')
-            else:
-                db_conn.execute('INSERT INTO etudiants(classe_id, prenom, nom) VALUES (?, ?, ?)', (classe_id, prenom, nom))
-                db_conn.commit()
-                flash('Étudiant ajouté.')
-            return redirect(url_for('etudiants', classe_id=classe_id))
-
-    if USE_SQLALCHEMY:
-        classes_liste = Classe.query.join(Annee).order_by(Annee.libelle.desc(), Classe.nom).all()
-        etudiants_rows = Etudiant.query.join(Classe).join(Annee).order_by(
-            Annee.libelle.desc(), Classe.nom, Etudiant.nom, Etudiant.prenom
-        ).all()
-    else:
-        classes_liste = db_conn.execute(
-            'SELECT c.id, c.nom, a.libelle FROM classes c JOIN annees a ON a.id = c.annee_id ORDER BY a.libelle DESC, c.nom'
-        ).fetchall()
-        etudiants_rows = db_conn.execute(
-            'SELECT e.id, e.prenom, e.nom, e.classe_id, c.nom AS classe_nom, a.libelle FROM etudiants e JOIN classes c ON c.id = e.classe_id JOIN annees a ON a.id = c.annee_id ORDER BY a.libelle DESC, c.nom, e.nom, e.prenom'
-        ).fetchall()
-    
+            etudiant = Etudiant(classe_id=int(classe_id), prenom=prenom, nom=nom)
+            db.session.add(etudiant)
+            db.session.commit()
+            flash('Étudiant ajouté.')
+        return redirect(url_for('etudiants', classe_id=classe_id))
+    classes_liste = Classe.query.join(Annee).order_by(Annee.libelle.desc(), Classe.nom).all()
+    etudiants_rows = Etudiant.query.join(Classe).join(Annee).order_by(Annee.libelle.desc(), Classe.nom, Etudiant.nom, Etudiant.prenom).all()
     etudiants_par_classe = {}
-    for ligne in etudiants_rows:
-        cle = f"{ligne['libelle']} - {ligne['classe_nom']}" if not USE_SQLALCHEMY else f"{ligne.classe.annee.libelle} - {ligne.classe.nom}"
+    for e in etudiants_rows:
+        cle = f"{e.classe.annee.libelle} - {e.classe.nom}"
         if cle not in etudiants_par_classe:
             etudiants_par_classe[cle] = []
-        etudiants_par_classe[cle].append({
-            'id': ligne['id'] if not USE_SQLALCHEMY else ligne.id,
-            'prenom': ligne['prenom'] if not USE_SQLALCHEMY else ligne.prenom,
-            'nom': ligne['nom'] if not USE_SQLALCHEMY else ligne.nom
-        })
-
+        etudiants_par_classe[cle].append({'id': e.id, 'prenom': e.prenom, 'nom': e.nom})
     contenu = """
     <div class="card"><h2>Étudiants</h2>
     <form method="post" class="form-grid">
-        <div>
-            <label>Classe</label>
-            <select name="classe_id" required>
-                <option value="">Choisir</option>
-                {% for classe in classes_liste %}
-                <option value="{{ classe.id }}" {% if classe_id|string == classe.id|string %}selected{% endif %}>
-                    {{ classe.annee.libelle }} - {{ classe.nom }}
-                </option>
-                {% endfor %}
-            </select>
-        </div>
-        <div>
-            <label>Prénom</label>
-            <input name="prenom" placeholder="Moussa" required>
-        </div>
-        <div>
-            <label>Nom</label>
-            <input name="nom" placeholder="DIALLO" required>
-        </div>
+        <div><label>Classe</label><select name="classe_id" required><option value="">Choisir</option>
+        {% for c in classes_liste %}<option value="{{ c.id }}">{{ c.annee.libelle }} - {{ c.nom }}</option>{% endfor %}</select></div>
+        <div><label>Prénom</label><input name="prenom" placeholder="Moussa" required></div>
+        <div><label>Nom</label><input name="nom" placeholder="DIALLO" required></div>
         <button class="btn btn-success">Ajouter</button>
-    </form>
-    </div>
-    {% for classe_cle, liste_etudiants in etudiants_par_classe.items() %}
-    <div class="card">
-        <div class="factor-header">
-            <span class="factor-label">Classe :</span>
-            <span class="factor-value">{{ classe_cle }}</span>
-        </div>
-        <table>
-            <tr><th>Prénom</th><th>Nom</th><th>Action</th></tr>
-            {% for e in liste_etudiants %}
-            <tr>
-                <td>{{ e.prenom }}</td>
-                <td>{{ e.nom }}</td>
-                <td>
-                    <a class="delete-cross" href="{{ url_for('supprimer_etudiant', id=e.id) }}" onclick="return confirm('Supprimer cet étudiant et toutes ses notes ?')">×</a>
-                </td>
-            </tr>
-            {% else %}
-            <tr><td colspan="3">Aucun étudiant dans cette classe.</td></tr>
-            {% endfor %}
-        </table>
-    </div>
-    {% else %}
-    <div class="card"><div class="alert">Aucun étudiant enregistré.</div></div>
-    {% endfor %}
+    </form></div>
+    {% for classe_cle, liste in etudiants_par_classe.items() %}
+    <div class="card"><div class="factor-header"><span class="factor-label">Classe :</span><span class="factor-value">{{ classe_cle }}</span></div>
+    <table><tr><th>Prénom</th><th>Nom</th><th>Action</th></tr>
+    {% for e in liste %}
+    <tr><td>{{ e.prenom }}</td><td>{{ e.nom }}</td><td><a class="delete-cross" href="{{ url_for('supprimer_etudiant', id=e.id) }}" onclick="return confirm('Supprimer ?')">×</a></td></tr>
+    {% else %}<tr><td colspan="3">Aucun étudiant.</td></tr>{% endfor %}
+    </table></div>{% else %}<div class="card"><div class="alert">Aucun étudiant.</div></div>{% endfor %}
     """
-    return page(
-        contenu,
-        classes_liste=classes_liste,
-        etudiants_par_classe=etudiants_par_classe,
-        classe_id=classe_id,
-    )
-
+    return page(contenu, classes_liste=classes_liste, etudiants_par_classe=etudiants_par_classe)
 
 @app.route('/etudiants/supprimer/<int:id>')
 def supprimer_etudiant(id):
-    if USE_SQLALCHEMY:
-        etudiant = Etudiant.query.get_or_404(id)
-        db.session.delete(etudiant)
-        db.session.commit()
-    else:
-        db = connexion_db()
-        db.execute('DELETE FROM etudiants WHERE id = ?', (id,))
-        db.commit()
+    e = Etudiant.query.get_or_404(id)
+    db.session.delete(e)
+    db.session.commit()
     flash('Étudiant supprimé.')
     return redirect(url_for('etudiants'))
 
-
 @app.route('/saisie', methods=['GET', 'POST'])
 def saisie():
-    db_conn = connexion_db() if not USE_SQLALCHEMY else None
-    db_session = db.session if USE_SQLALCHEMY else None
-    
-    if USE_SQLALCHEMY:
-        classes_liste = Classe.query.join(Annee).order_by(Annee.libelle.desc(), Classe.nom).all()
-        trimestres_liste = Trimestre.query.join(Annee).order_by(Annee.libelle.desc(), Trimestre.nom).all()
-        disciplines_liste = Discipline.query.order_by(Discipline.nom).all()
-    else:
-        classes_liste = db_conn.execute(
-            'SELECT c.id, c.nom, a.libelle FROM classes c JOIN annees a ON a.id = c.annee_id ORDER BY a.libelle DESC, c.nom'
-        ).fetchall()
-        trimestres_liste = db_conn.execute(
-            'SELECT t.id, t.nom, a.libelle FROM trimestres t JOIN annees a ON a.id = t.annee_id ORDER BY a.libelle DESC, t.nom'
-        ).fetchall()
-        disciplines_liste = db_conn.execute('SELECT * FROM disciplines ORDER BY nom').fetchall()
-
+    classes_liste = Classe.query.join(Annee).order_by(Annee.libelle.desc(), Classe.nom).all()
+    trimestres_liste = Trimestre.query.join(Annee).order_by(Annee.libelle.desc(), Trimestre.nom).all()
+    disciplines_liste = Discipline.query.order_by(Discipline.nom).all()
     classe_id = request.args.get('classe_id', '')
     trimestre_id = request.args.get('trimestre_id', '')
     discipline_id = request.args.get('discipline_id', '')
     type_eval = request.args.get('type', 'devoir')
-
     classe = trimestre = discipline = None
     etudiants_liste = []
     coef_discipline = 1.0
-
     if classe_id:
-        if USE_SQLALCHEMY:
-            classe = Classe.query.join(Annee).filter(Classe.id == int(classe_id)).first()
-        else:
-            classe = db_conn.execute(
-                'SELECT c.*, a.libelle FROM classes c JOIN annees a ON a.id = c.annee_id WHERE c.id = ?',
-                (classe_id,),
-            ).fetchone()
+        classe = Classe.query.join(Annee).filter(Classe.id == int(classe_id)).first()
     if trimestre_id:
-        if USE_SQLALCHEMY:
-            trimestre = Trimestre.query.get(int(trimestre_id))
-        else:
-            trimestre = db_conn.execute('SELECT * FROM trimestres WHERE id = ?', (trimestre_id,)).fetchone()
+        trimestre = Trimestre.query.get(int(trimestre_id))
     if discipline_id:
-        if USE_SQLALCHEMY:
-            discipline = Discipline.query.get(int(discipline_id))
-        else:
-            discipline = db_conn.execute('SELECT * FROM disciplines WHERE id = ?', (discipline_id,)).fetchone()
-
+        discipline = Discipline.query.get(int(discipline_id))
     if classe and trimestre and discipline:
-        if USE_SQLALCHEMY:
-            etudiants_liste = Etudiant.query.filter_by(classe_id=int(classe_id)).order_by(Etudiant.nom, Etudiant.prenom).all()
-        else:
-            etudiants_liste = db_conn.execute(
-                'SELECT * FROM etudiants WHERE classe_id = ? ORDER BY nom, prenom',
-                (classe_id,),
-            ).fetchall()
+        etudiants_liste = Etudiant.query.filter_by(classe_id=int(classe_id)).order_by(Etudiant.nom, Etudiant.prenom).all()
         coef_discipline = coefficient_discipline_classe(int(classe_id), int(discipline_id))
-
         if request.method == 'POST':
             for etudiant in etudiants_liste:
-                note = convertir_note(request.form.get(f'note_{etudiant["id"] if not USE_SQLALCHEMY else etudiant.id}'))
+                note = convertir_note(request.form.get(f'note_{etudiant.id}'))
                 if note is None:
                     continue
                 numero = 1 if type_eval == 'devoir' else 4
-                if USE_SQLALCHEMY:
-                    existing = Evaluation.query.filter_by(
-                        etudiant_id=etudiant.id,
-                        discipline_id=int(discipline_id),
-                        trimestre_id=int(trimestre_id),
-                        type=type_eval,
-                        numero=numero
-                    ).first()
-                    if existing:
-                        existing.note = note
-                    else:
-                        evaluation = Evaluation(
-                            etudiant_id=etudiant.id,
-                            discipline_id=int(discipline_id),
-                            trimestre_id=int(trimestre_id),
-                            type=type_eval,
-                            numero=numero,
-                            note=note
-                        )
-                        db_session.add(evaluation)
+                existing = Evaluation.query.filter_by(etudiant_id=etudiant.id, discipline_id=int(discipline_id), trimestre_id=int(trimestre_id), type=type_eval, numero=numero).first()
+                if existing:
+                    existing.note = note
                 else:
-                    db_conn.execute(
-                        'INSERT OR REPLACE INTO evaluations(etudiant_id, discipline_id, trimestre_id, type, numero, note) VALUES (?, ?, ?, ?, ?, ?)',
-                        (etudiant['id'], discipline_id, trimestre_id, type_eval, numero, note),
-                    )
-            if USE_SQLALCHEMY:
-                db_session.commit()
-            else:
-                db_conn.commit()
+                    evaluation = Evaluation(etudiant_id=etudiant.id, discipline_id=int(discipline_id), trimestre_id=int(trimestre_id), type=type_eval, numero=numero, note=note)
+                    db.session.add(evaluation)
+            db.session.commit()
             flash('Notes enregistrées.')
-            return redirect(
-                url_for(
-                    'saisie',
-                    classe_id=classe_id,
-                    trimestre_id=trimestre_id,
-                    discipline_id=discipline_id,
-                    type=type_eval,
-                )
-            )
-
+            return redirect(url_for('saisie', classe_id=classe_id, trimestre_id=trimestre_id, discipline_id=discipline_id, type=type_eval))
     contenu = """
     <div class="card"><h2>Saisie des notes</h2>
     <form method="get" class="form-grid">
-        <div>
-            <label>Classe</label>
-            <select name="classe_id" required>
-                <option value="">Choisir une classe</option>
-                {% for c in classes_liste %}
-                <option value="{{ c.id }}" {% if classe_id|string == c.id|string %}selected{% endif %}>
-                    {{ c.annee.libelle if USE_SQLALCHEMY else c.libelle }} - {{ c.nom }}
-                </option>
-                {% endfor %}
-            </select>
-        </div>
-        <div>
-            <label>Trimestre</label>
-            <select name="trimestre_id" required>
-                <option value="">Choisir un trimestre</option>
-                {% for t in trimestres_liste %}
-                <option value="{{ t.id }}" {% if trimestre_id|string == t.id|string %}selected{% endif %}>
-                    {{ t.annee.libelle if USE_SQLALCHEMY else t.libelle }} - {{ t.nom }}
-                </option>
-                {% endfor %}
-            </select>
-        </div>
-        <div>
-            <label>Discipline</label>
-            <select name="discipline_id" required>
-                <option value="">Choisir une discipline</option>
-                {% for d in disciplines_liste %}
-                <option value="{{ d.id }}" {% if discipline_id|string == d.id|string %}selected{% endif %}>
-                    {{ d.nom }}
-                </option>
-                {% endfor %}
-            </select>
-        </div>
-        <div>
-            <label>Type</label>
-            <select name="type" required>
-                <option value="devoir" {% if type_eval == 'devoir' %}selected{% endif %}>Devoir</option>
-                <option value="examen" {% if type_eval == 'examen' %}selected{% endif %}>Examen</option>
-            </select>
-        </div>
+        <div><label>Classe</label><select name="classe_id" required><option value="">Choisir</option>
+        {% for c in classes_liste %}<option value="{{ c.id }}">{{ c.annee.libelle }} - {{ c.nom }}</option>{% endfor %}</select></div>
+        <div><label>Trimestre</label><select name="trimestre_id" required><option value="">Choisir</option>
+        {% for t in trimestres_liste %}<option value="{{ t.id }}">{{ t.annee.libelle }} - {{ t.nom }}</option>{% endfor %}</select></div>
+        <div><label>Discipline</label><select name="discipline_id" required><option value="">Choisir</option>
+        {% for d in disciplines_liste %}<option value="{{ d.id }}">{{ d.nom }}</option>{% endfor %}</select></div>
+        <div><label>Type</label><select name="type" required><option value="devoir">Devoir</option><option value="examen">Examen</option></select></div>
         <button class="btn" type="submit">Afficher</button>
-    </form>
-    </div>
+    </form></div>
     {% if classe and trimestre and discipline and etudiants_liste %}
-    <div class="card">
-        <div class="factor-header">
-            <span class="factor-label">Année :</span>
-            <span class="factor-value">{{ classe.annee.libelle if USE_SQLALCHEMY else classe.libelle }}</span>
-            <span style="margin:0 10px;color:#aeb8c4;">|</span>
-            <span class="factor-label">Classe :</span>
-            <span class="factor-value">{{ classe.nom }}</span>
-            <span style="margin:0 10px;color:#aeb8c4;">|</span>
-            <span class="factor-label">Trimestre :</span>
-            <span class="factor-value">{{ trimestre.nom }}</span>
-            <span style="margin:0 10px;color:#aeb8c4;">|</span>
-            <span class="factor-label">Discipline :</span>
-            <span class="factor-value">{{ discipline.nom }}</span>
-            <span style="margin:0 10px;color:#aeb8c4;">|</span>
-            <span class="factor-label">Coeff :</span>
-            <span class="factor-value">{{ '%.1f'|format(coef_discipline) }}</span>
-            <span style="margin:0 10px;color:#aeb8c4;">|</span>
-            <span class="factor-label">Type :</span>
-            <span class="factor-value">{{ type_eval }}</span>
-        </div>
-        <h3>Notes</h3>
-        <form method="post">
-            <table class="evaluation-table">
-                <tr><th>Étudiant</th><th>Note / 20</th></tr>
-                {% for etudiant in etudiants_liste %}
-                {% if USE_SQLALCHEMY %}
-                {% set note_existe = Evaluation.query.filter_by(
-                    etudiant_id=etudiant.id,
-                    discipline_id=discipline.id,
-                    trimestre_id=trimestre.id,
-                    type=type_eval,
-                    numero=(1 if type_eval == 'devoir' else 4)
-                ).first() %}
-                {% else %}
-                {% set note_existe = db_conn.execute(
-                    'SELECT note FROM evaluations WHERE etudiant_id = ? AND discipline_id = ? AND trimestre_id = ? AND type = ? AND numero = ?',
-                    (etudiant.id, discipline.id, trimestre.id, type_eval, 1 if type_eval == 'devoir' else 4)
-                ).fetchone() %}
-                {% endif %}
-                <tr>
-                    <td>{{ etudiant.prenom }} {{ etudiant.nom }}</td>
-                    <td>
-                        <input class="note-input" type="text" name="note_{{ etudiant.id }}" value="{{ note_existe.note if note_existe and USE_SQLALCHEMY else (note_existe['note'] if note_existe else '') }}" placeholder="0-20">
-                    </td>
-                </tr>
-                {% endfor %}
-            </table>
-            <div style="margin-top:12px;">
-                <button class="btn btn-success" type="submit">Enregistrer toutes les notes</button>
-            </div>
-        </form>
-    </div>
-    {% elif classe and trimestre and discipline %}
-    <div class="card"><div class="alert">Aucun étudiant dans cette classe.</div></div>
-    {% endif %}
+    <div class="card"><div class="factor-header">
+        <span class="factor-label">Année :</span><span class="factor-value">{{ classe.annee.libelle }}</span> |
+        <span class="factor-label">Classe :</span><span class="factor-value">{{ classe.nom }}</span> |
+        <span class="factor-label">Trimestre :</span><span class="factor-value">{{ trimestre.nom }}</span> |
+        <span class="factor-label">Discipline :</span><span class="factor-value">{{ discipline.nom }}</span> |
+        <span class="factor-label">Coeff :</span><span class="factor-value">{{ '%.1f'|format(coef_discipline) }}</span> |
+        <span class="factor-label">Type :</span><span class="factor-value">{{ type_eval }}</span>
+    </div><h3>Notes</h3>
+    <form method="post"><table class="evaluation-table"><tr><th>Étudiant</th><th>Note / 20</th></tr>
+    {% for etudiant in etudiants_liste %}
+    {% set note_existe = Evaluation.query.filter_by(etudiant_id=etudiant.id, discipline_id=discipline.id, trimestre_id=trimestre.id, type=type_eval, numero=(1 if type_eval == 'devoir' else 4)).first() %}
+    <tr><td>{{ etudiant.prenom }} {{ etudiant.nom }}</td><td><input class="note-input" type="text" name="note_{{ etudiant.id }}" value="{{ note_existe.note if note_existe else '' }}" placeholder="0-20"></td></tr>
+    {% endfor %}</table><div style="margin-top:12px;"><button class="btn btn-success" type="submit">Enregistrer</button></div></form></div>
+    {% elif classe and trimestre and discipline %}<div class="card"><div class="alert">Aucun étudiant.</div></div>{% endif %}
     """
-    return page(
-        contenu,
-        classes_liste=classes_liste,
-        trimestres_liste=trimestres_liste,
-        disciplines_liste=disciplines_liste,
-        classe_id=classe_id,
-        trimestre_id=trimestre_id,
-        discipline_id=discipline_id,
-        type_eval=type_eval,
-        classe=classe,
-        trimestre=trimestre,
-        discipline=discipline,
-        etudiants_liste=etudiants_liste,
-        coef_discipline=coef_discipline,
-        db=db_conn if not USE_SQLALCHEMY else None,
-    )
-
+    return page(contenu, classes_liste=classes_liste, trimestres_liste=trimestres_liste, disciplines_liste=disciplines_liste, classe=classe, trimestre=trimestre, discipline=discipline, etudiants_liste=etudiants_liste, coef_discipline=coef_discipline, type_eval=type_eval)
 
 def creer_pdf(titre, sous_titre, donnees):
     sortie = io.BytesIO()
-    doc = SimpleDocTemplate(
-        sortie,
-        pagesize=landscape(A4),
-        rightMargin=25,
-        leftMargin=25,
-        topMargin=25,
-        bottomMargin=25,
-    )
+    doc = SimpleDocTemplate(sortie, pagesize=landscape(A4), rightMargin=25, leftMargin=25, topMargin=25, bottomMargin=25)
     styles = getSampleStyleSheet()
     style_titre = ParagraphStyle('TitreCentre', parent=styles['Title'], alignment=TA_CENTER, fontSize=16, leading=20)
-    elements = [
-        Paragraph(titre, style_titre),
-        Spacer(1, 8),
-        Paragraph(sous_titre, styles['Normal']),
-        Spacer(1, 12),
-    ]
+    elements = [Paragraph(titre, style_titre), Spacer(1, 8), Paragraph(sous_titre, styles['Normal']), Spacer(1, 12)]
     tableau = LongTable(donnees, colWidths=[140, 80, 80, 110, 90], repeatRows=1)
-    tableau.setStyle(
-        TableStyle(
-            [
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#174a78')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('ALIGN', (1, 1), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#eef4fa')]),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('TOPPADDING', (0, 0), (-1, -1), 7),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
-                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#d4edda')),
-                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-            ]
-        )
-    )
+    tableau.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#174a78')), ('TEXTCOLOR', (0, 0), (-1, 0), colors.white), ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'), ('GRID', (0, 0), (-1, -1), 0.5, colors.grey), ('ALIGN', (1, 1), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#eef4fa')]), ('FONTSIZE', (0, 0), (-1, -1), 9), ('TOPPADDING', (0, 0), (-1, -1), 7), ('BOTTOMPADDING', (0, 0), (-1, -1), 7), ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#d4edda')), ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold')]))
     elements.append(tableau)
     doc.build(elements)
     sortie.seek(0)
     return sortie
 
-
 def creer_pdf_annuel(titre, sous_titre, donnees, nb_colonnes):
     sortie = io.BytesIO()
-    doc = SimpleDocTemplate(
-        sortie,
-        pagesize=landscape(A4),
-        rightMargin=25,
-        leftMargin=25,
-        topMargin=25,
-        bottomMargin=25,
-    )
+    doc = SimpleDocTemplate(sortie, pagesize=landscape(A4), rightMargin=25, leftMargin=25, topMargin=25, bottomMargin=25)
     styles = getSampleStyleSheet()
     style_titre = ParagraphStyle('TitreCentre', parent=styles['Title'], alignment=TA_CENTER, fontSize=16, leading=20)
-    elements = [
-        Paragraph(titre, style_titre),
-        Spacer(1, 8),
-        Paragraph(sous_titre, styles['Normal']),
-        Spacer(1, 12),
-    ]
+    elements = [Paragraph(titre, style_titre), Spacer(1, 8), Paragraph(sous_titre, styles['Normal']), Spacer(1, 12)]
     largeur_page = 520
     largeur_premiere = 140
     largeur_derniere = 110
@@ -1353,144 +617,45 @@ def creer_pdf_annuel(titre, sous_titre, donnees, nb_colonnes):
     largeur_intermediaire = reste / max(nb_colonnes - 2, 1)
     col_widths = [largeur_premiere] + [largeur_intermediaire] * (nb_colonnes - 2) + [largeur_derniere]
     tableau = LongTable(donnees, colWidths=col_widths, repeatRows=1)
-    tableau.setStyle(
-        TableStyle(
-            [
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#174a78')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('ALIGN', (1, 1), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#eef4fa')]),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('TOPPADDING', (0, 0), (-1, -1), 7),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
-                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#d4edda')),
-                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-            ]
-        )
-    )
+    tableau.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#174a78')), ('TEXTCOLOR', (0, 0), (-1, 0), colors.white), ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'), ('GRID', (0, 0), (-1, -1), 0.5, colors.grey), ('ALIGN', (1, 1), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#eef4fa')]), ('FONTSIZE', (0, 0), (-1, -1), 9), ('TOPPADDING', (0, 0), (-1, -1), 7), ('BOTTOMPADDING', (0, 0), (-1, -1), 7), ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#d4edda')), ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold')]))
     elements.append(tableau)
     doc.build(elements)
     sortie.seek(0)
     return sortie
 
-
 @app.route('/bulletin-pdf')
 def bulletin_pdf():
-    db_conn = connexion_db() if not USE_SQLALCHEMY else None
-    
-    if USE_SQLALCHEMY:
-        classes_liste = Classe.query.join(Annee).order_by(Annee.libelle.desc(), Classe.nom).all()
-        trimestres_liste = Trimestre.query.join(Annee).order_by(Annee.libelle.desc(), Trimestre.nom).all()
-    else:
-        classes_liste = db_conn.execute(
-            'SELECT c.id, c.nom, a.libelle FROM classes c JOIN annees a ON a.id = c.annee_id ORDER BY a.libelle DESC, c.nom'
-        ).fetchall()
-        trimestres_liste = db_conn.execute(
-            'SELECT t.id, t.nom, a.libelle FROM trimestres t JOIN annees a ON a.id = t.annee_id ORDER BY a.libelle DESC, t.nom'
-        ).fetchall()
-    
+    classes_liste = Classe.query.join(Annee).order_by(Annee.libelle.desc(), Classe.nom).all()
+    trimestres_liste = Trimestre.query.join(Annee).order_by(Annee.libelle.desc(), Trimestre.nom).all()
     classe_id = request.args.get('classe_id', '')
     trimestre_id = request.args.get('trimestre_id', '')
     classe = trimestre = None
     etudiants_liste = []
     if classe_id:
-        if USE_SQLALCHEMY:
-            classe = Classe.query.join(Annee).filter(Classe.id == int(classe_id)).first()
-        else:
-            classe = db_conn.execute(
-                'SELECT c.*, a.libelle FROM classes c JOIN annees a ON a.id = c.annee_id WHERE c.id = ?',
-                (classe_id,),
-            ).fetchone()
+        classe = Classe.query.join(Annee).filter(Classe.id == int(classe_id)).first()
     if trimestre_id:
-        if USE_SQLALCHEMY:
-            trimestre = Trimestre.query.get(int(trimestre_id))
-        else:
-            trimestre = db_conn.execute('SELECT * FROM trimestres WHERE id = ?', (trimestre_id,)).fetchone()
+        trimestre = Trimestre.query.get(int(trimestre_id))
     if classe and trimestre:
-        if USE_SQLALCHEMY:
-            etudiants_liste = Etudiant.query.filter_by(classe_id=int(classe_id)).order_by(Etudiant.nom, Etudiant.prenom).all()
-        else:
-            etudiants_liste = db_conn.execute(
-                'SELECT * FROM etudiants WHERE classe_id = ? ORDER BY nom, prenom',
-                (classe_id,),
-            ).fetchall()
-
+        etudiants_liste = Etudiant.query.filter_by(classe_id=int(classe_id)).order_by(Etudiant.nom, Etudiant.prenom).all()
     contenu = """
     <div class="card"><h2>Bulletin PDF (par trimestre)</h2>
-    <div class="info">Choisissez une classe et un trimestre. Chaque ligne donne accès au PDF de l'élève.</div>
+    <div class="info">Choisissez une classe et un trimestre.</div>
     <form method="get" class="form-grid">
-        <div>
-            <label>Classe</label>
-            <select name="classe_id" required>
-                <option value="">Choisir une classe</option>
-                {% for classe_item in classes_liste %}
-                <option value="{{ classe_item.id }}" {% if classe_id|string == classe_item.id|string %}selected{% endif %}>
-                    {{ classe_item.annee.libelle if USE_SQLALCHEMY else classe_item.libelle }} - {{ classe_item.nom }}
-                </option>
-                {% endfor %}
-            </select>
-        </div>
-        <div>
-            <label>Trimestre</label>
-            <select name="trimestre_id" required>
-                <option value="">Choisir un trimestre</option>
-                {% for trimestre_item in trimestres_liste %}
-                <option value="{{ trimestre_item.id }}" {% if trimestre_id|string == trimestre_item.id|string %}selected{% endif %}>
-                    {{ trimestre_item.annee.libelle if USE_SQLALCHEMY else trimestre_item.libelle }} - {{ trimestre_item.nom }}
-                </option>
-                {% endfor %}
-            </select>
-        </div>
-        <button class="btn" type="submit">Afficher la liste</button>
-   
-
-
-
-
-
+        <div><label>Classe</label><select name="classe_id" required><option value="">Choisir</option>
+        {% for c in classes_liste %}<option value="{{ c.id }}">{{ c.annee.libelle }} - {{ c.nom }}</option>{% endfor %}</select></div>
+        <div><label>Trimestre</label><select name="trimestre_id" required><option value="">Choisir</option>
+        {% for t in trimestres_liste %}<option value="{{ t.id }}">{{ t.annee.libelle }} - {{ t.nom }}</option>{% endfor %}</select></div>
+        <button class="btn" type="submit">Afficher</button>
+    </form></div>
     {% if classe and trimestre %}
-    <div class="card">
-        <div class="factor-header">
-            <span class="factor-label">Année :</span>
-            <span class="factor-value">{{ classe.annee.libelle if USE_SQLALCHEMY else classe.libelle }}</span>
-            <span style="margin:0 10px;color:#aeb8c4;">|</span>
-            <span class="factor-label">Classe :</span>
-            <span class="factor-value">{{ classe.nom }}</span>
-            <span style="margin:0 10px;color:#aeb8c4;">|</span>
-            <span class="factor-label">Trimestre :</span>
-            <span class="factor-value">{{ trimestre.nom }}</span>
-        </div>
-        <table>
-            <tr><th>Élève</th><th>Trimestre</th><th>Action</th></tr>
-            {% for etudiant in etudiants_liste %}
-            <tr>
-                <td>{{ etudiant.prenom }} {{ etudiant.nom }}</td>
-                <td>{{ trimestre.nom }}</td>
-                <td>
-                    <a class="btn btn-success" href="{{ url_for('pdf_bulletin_eleve_trimestre', etudiant_id=etudiant.id, trimestre_id=trimestre.id) }}">PDF</a>
-                </td>
-            </tr>
-            {% else %}
-            <tr><td colspan="3">Aucun étudiant dans cette classe.</td></tr>
-            {% endfor %}
-        </table>
-    </div>
-    {% endif %}
+    <div class="card"><div class="factor-header"><span class="factor-label">Année :</span><span class="factor-value">{{ classe.annee.libelle }}</span> | <span class="factor-label">Classe :</span><span class="factor-value">{{ classe.nom }}</span> | <span class="factor-label">Trimestre :</span><span class="factor-value">{{ trimestre.nom }}</span></div>
+    <table><tr><th>Élève</th><th>Trimestre</th><th>Action</th></tr>
+    {% for etudiant in etudiants_liste %}
+    <tr><td>{{ etudiant.prenom }} {{ etudiant.nom }}</td><td>{{ trimestre.nom }}</td><td><a class="btn btn-success" href="{{ url_for('pdf_bulletin_eleve_trimestre', etudiant_id=etudiant.id, trimestre_id=trimestre.id) }}">PDF</a></td></tr>
+    {% else %}<tr><td colspan="3">Aucun étudiant.</td></tr>{% endfor %}
+    </table></div>{% endif %}
     """
-    return page(
-        contenu,
-        classes_liste=classes_liste,
-        trimestres_liste=trimestres_liste,
-        classe_id=classe_id,
-        trimestre_id=trimestre_id,
-        classe=classe,
-        trimestre=trimestre,
-        etudiants_liste=etudiants_liste,
-    )
-
+    return page(contenu, classes_liste=classes_liste, trimestres_liste=trimestres_liste, classe=classe, trimestre=trimestre, etudiants_liste=etudiants_liste)
 
 @app.route('/pdf/bulletin-eleve-trimestre')
 def pdf_bulletin_eleve_trimestre():
@@ -1498,246 +663,94 @@ def pdf_bulletin_eleve_trimestre():
     trimestre_id = request.args.get('trimestre_id')
     if not etudiant_id or not trimestre_id:
         return 'Étudiant ou trimestre manquant.', 400
-    
-    if USE_SQLALCHEMY:
-        etudiant = Etudiant.query.get(int(etudiant_id))
-        trimestre = Trimestre.query.get(int(trimestre_id))
-        if etudiant is None or trimestre is None:
-            return 'Étudiant ou trimestre introuvable.', 404
-        classe = Classe.query.join(Annee).filter(Classe.id == etudiant.classe_id).first()
-    else:
-        db = connexion_db()
-        etudiant = db.execute('SELECT * FROM etudiants WHERE id = ?', (etudiant_id,)).fetchone()
-        trimestre = db.execute('SELECT * FROM trimestres WHERE id = ?', (trimestre_id,)).fetchone()
-        if etudiant is None or trimestre is None:
-            return 'Étudiant ou trimestre introuvable.', 404
-        classe = db.execute(
-            'SELECT c.*, a.libelle FROM classes c JOIN annees a ON a.id = c.annee_id WHERE c.id = ?',
-            (etudiant['classe_id'],),
-        ).fetchone()
-
-    disciplines = disciplines_de_classe(int(etudiant['classe_id'] if not USE_SQLALCHEMY else etudiant.classe_id))
-    moyenne_finale = moyenne_finale_eleve_trimestre(
-        int(etudiant['id'] if not USE_SQLALCHEMY else etudiant.id),
-        int(etudiant['classe_id'] if not USE_SQLALCHEMY else etudiant.classe_id),
-        int(trimestre['id'] if not USE_SQLALCHEMY else trimestre.id)
-    )
-    
+    etudiant = Etudiant.query.get(int(etudiant_id))
+    trimestre = Trimestre.query.get(int(trimestre_id))
+    if etudiant is None or trimestre is None:
+        return 'Introuvable.', 404
+    classe = Classe.query.join(Annee).filter(Classe.id == etudiant.classe_id).first()
+    disciplines = disciplines_de_classe(etudiant.classe_id)
+    moyenne_finale = moyenne_finale_eleve_trimestre(etudiant.id, etudiant.classe_id, trimestre.id)
     donnees = [['Discipline', 'Nclasse', 'NExam', 'Moy. générale', 'Statut']]
     for discipline in disciplines:
-        resultat = resultat_etudiant_discipline_trimestre(
-            int(etudiant['id'] if not USE_SQLALCHEMY else etudiant.id),
-            discipline['id'],
-            int(trimestre['id'] if not USE_SQLALCHEMY else trimestre.id)
-        )
-        donnees.append(
-            [
-                discipline['nom'],
-                format_note(resultat['n_classe']),
-                format_note(resultat['n_exam']),
-                format_note(resultat['moyenne']),
-                resultat['statut'],
-            ]
-        )
-    donnees.append(
-        [
-            'MOYENNE FINALE',
-            '',
-            '',
-            format_note(moyenne_finale),
-            statut_moyenne(moyenne_finale) if moyenne_finale is not None else 'Incomplet',
-        ]
-    )
-    pdf = creer_pdf(
-        "Bulletin de l'élève",
-        f"Année : {classe['libelle'] if not USE_SQLALCHEMY else classe.annee.libelle} | Classe : {classe['nom']} | Trimestre : {trimestre['nom']} | Élève : {etudiant['prenom'] if not USE_SQLALCHEMY else etudiant.prenom} {etudiant['nom'] if not USE_SQLALCHEMY else etudiant.nom}",
-        donnees,
-    )
+        resultat = resultat_etudiant_discipline_trimestre(etudiant.id, discipline['id'], trimestre.id)
+        donnees.append([discipline['nom'], format_note(resultat['n_classe']), format_note(resultat['n_exam']), format_note(resultat['moyenne']), resultat['statut']])
+    donnees.append(['MOYENNE FINALE', '', '', format_note(moyenne_finale), statut_moyenne(moyenne_finale) if moyenne_finale is not None else 'Incomplet'])
+    pdf = creer_pdf("Bulletin de l'élève", f"Année : {classe.annee.libelle} | Classe : {classe.nom} | Trimestre : {trimestre.nom} | Élève : {etudiant.prenom} {etudiant.nom}", donnees)
     return send_file(pdf, as_attachment=False, download_name='bulletin_eleve.pdf', mimetype='application/pdf')
-
 
 @app.route('/pdf-annuel')
 def pdf_annuel():
-    if USE_SQLALCHEMY:
-        classes_liste = Classe.query.join(Annee).order_by(Annee.libelle.desc(), Classe.nom).all()
-    else:
-        db = connexion_db()
-        classes_liste = db.execute(
-            'SELECT c.id, c.nom, a.libelle FROM classes c JOIN annees a ON a.id = c.annee_id ORDER BY a.libelle DESC, c.nom'
-        ).fetchall()
-    
+    classes_liste = Classe.query.join(Annee).order_by(Annee.libelle.desc(), Classe.nom).all()
     classe_id = request.args.get('classe_id', '')
     classe = None
     etudiants_liste = []
     if classe_id:
-        if USE_SQLALCHEMY:
-            classe = Classe.query.join(Annee).filter(Classe.id == int(classe_id)).first()
-            if classe is not None:
-                etudiants_liste = Etudiant.query.filter_by(classe_id=int(classe_id)).order_by(Etudiant.nom, Etudiant.prenom).all()
-        else:
-            classe = db.execute(
-                'SELECT c.*, a.libelle FROM classes c JOIN annees a ON a.id = c.annee_id WHERE c.id = ?',
-                (classe_id,),
-            ).fetchone()
-            if classe is not None:
-                etudiants_liste = db.execute(
-                    'SELECT * FROM etudiants WHERE classe_id = ? ORDER BY nom, prenom',
-                    (classe_id,),
-                ).fetchall()
-
+        classe = Classe.query.join(Annee).filter(Classe.id == int(classe_id)).first()
+        if classe is not None:
+            etudiants_liste = Etudiant.query.filter_by(classe_id=int(classe_id)).order_by(Etudiant.nom, Etudiant.prenom).all()
     contenu = """
-    <div class="card"><h2>PDF annuel (par élève)</h2>
-    <div class="info">Choisissez une classe. Chaque ligne donne accès au PDF annuel de l'élève.</div>
+    <div class="card"><h2>PDF annuel</h2>
+    <div class="info">Choisissez une classe.</div>
     <form method="get" class="form-grid">
-        <div>
-            <label>Classe</label>
-            <select name="classe_id" required>
-                <option value="">Choisir une classe</option>
-                {% for classe_item in classes_liste %}
-                <option value="{{ classe_item.id }}" {% if classe_id|string == classe_item.id|string %}selected{% endif %}>
-                    {{ classe_item.annee.libelle if USE_SQLALCHEMY else classe_item.libelle }} - {{ classe_item.nom }}
-                </option>
-                {% endfor %}
-            </select>
-        </div>
-        <button class="btn" type="submit">Afficher la liste</button>
-    </form>
-    </div>
+        <div><label>Classe</label><select name="classe_id" required><option value="">Choisir</option>
+        {% for c in classes_liste %}<option value="{{ c.id }}">{{ c.annee.libelle }} - {{ c.nom }}</option>{% endfor %}</select></div>
+        <button class="btn" type="submit">Afficher</button>
+    </form></div>
     {% if classe %}
-    <div class="card">
-        <div class="factor-header">
-            <span class="factor-label">Année :</span>
-            <span class="factor-value">{{ classe.annee.libelle if USE_SQLALCHEMY else classe.libelle }}</span>
-            <span style="margin:0 10px;color:#aeb8c4;">|</span>
-            <span class="factor-label">Classe :</span>
-            <span class="factor-value">{{ classe.nom }}</span>
-        </div>
-        <table>
-            <tr><th>Élève</th><th>Action</th></tr>
-            {% for etudiant in etudiants_liste %}
-            <tr>
-                <td>{{ etudiant.prenom if USE_SQLALCHEMY else etudiant['prenom'] }} {{ etudiant.nom if USE_SQLALCHEMY else etudiant['nom'] }}</td>
-                <td>
-                    <a class="btn btn-success" href="{{ url_for('pdf_annuel_eleve', etudiant_id=etudiant.id) }}">PDF</a>
-                </td>
-            </tr>
-            {% else %}
-            <tr><td colspan="2">Aucun étudiant dans cette classe.</td></tr>
-            {% endfor %}
-        </table>
-    </div>
-    {% endif %}
+    <div class="card"><div class="factor-header"><span class="factor-label">Année :</span><span class="factor-value">{{ classe.annee.libelle }}</span> | <span class="factor-label">Classe :</span><span class="factor-value">{{ classe.nom }}</span></div>
+    <table><tr><th>Élève</th><th>Action</th></tr>
+    {% for etudiant in etudiants_liste %}
+    <tr><td>{{ etudiant.prenom }} {{ etudiant.nom }}</td><td><a class="btn btn-success" href="{{ url_for('pdf_annuel_eleve', etudiant_id=etudiant.id) }}">PDF</a></td></tr>
+    {% else %}<tr><td colspan="2">Aucun étudiant.</td></tr>{% endfor %}
+    </table></div>{% endif %}
     """
-    return page(
-        contenu,
-        classes_liste=classes_liste,
-        classe_id=classe_id,
-        classe=classe,
-        etudiants_liste=etudiants_liste,
-    )
-
+    return page(contenu, classes_liste=classes_liste, classe=classe, etudiants_liste=etudiants_liste)
 
 @app.route('/pdf/annuel-eleve')
 def pdf_annuel_eleve():
     etudiant_id = request.args.get('etudiant_id')
     if not etudiant_id:
         return 'Étudiant manquant.', 400
-    
-    if USE_SQLALCHEMY:
-        etudiant = Etudiant.query.get(int(etudiant_id))
-        if etudiant is None:
-            return 'Étudiant introuvable.', 404
-        classe = Classe.query.join(Annee).filter(Classe.id == etudiant.classe_id).first()
-        if classe is None:
-            return 'Classe introuvable.', 404
-        trimestres = Trimestre.query.filter_by(annee_id=classe.annee_id).order_by(Trimestre.nom).all()
-    else:
-        db = connexion_db()
-        etudiant = db.execute('SELECT * FROM etudiants WHERE id = ?', (etudiant_id,)).fetchone()
-        if etudiant is None:
-            return 'Étudiant introuvable.', 404
-        classe = db.execute(
-            'SELECT c.*, a.libelle FROM classes c JOIN annees a ON a.id = c.annee_id WHERE c.id = ?',
-            (etudiant['classe_id'],),
-        ).fetchone()
-        if classe is None:
-            return 'Classe introuvable.', 404
-        trimestres = db.execute(
-            'SELECT * FROM trimestres WHERE annee_id = ? ORDER BY nom',
-            (classe['annee_id'],),
-        ).fetchall()
-
-    disciplines = disciplines_de_classe(int(etudiant['classe_id'] if not USE_SQLALCHEMY else etudiant.classe_id))
-
-    en_tete = ['Discipline'] + [f"Moy. {t['nom'] if not USE_SQLALCHEMY else t.nom}" for t in trimestres] + ['Moy. annuelle']
+    etudiant = Etudiant.query.get(int(etudiant_id))
+    if etudiant is None:
+        return 'Introuvable.', 404
+    classe = Classe.query.join(Annee).filter(Classe.id == etudiant.classe_id).first()
+    if classe is None:
+        return 'Classe introuvable.', 404
+    trimestres = Trimestre.query.filter_by(annee_id=classe.annee_id).order_by(Trimestre.nom).all()
+    disciplines = disciplines_de_classe(etudiant.classe_id)
+    en_tete = ['Discipline'] + [f"Moy. {t.nom}" for t in trimestres] + ['Moy. annuelle']
     donnees = [en_tete]
     for discipline in disciplines:
         ligne = [discipline['nom']]
         moyennes = []
         for trimestre in trimestres:
-            resultat = resultat_etudiant_discipline_trimestre(
-                int(etudiant['id'] if not USE_SQLALCHEMY else etudiant.id),
-                discipline['id'],
-                int(trimestre['id'] if not USE_SQLALCHEMY else trimestre.id)
-            )
+            resultat = resultat_etudiant_discipline_trimestre(etudiant.id, discipline['id'], trimestre.id)
             moyennes.append(resultat['moyenne'])
             ligne.append(format_note(resultat['moyenne']))
         vals = [m for m in moyennes if m is not None]
         moyenne_annuelle = None if not vals else sum(vals) / len(vals)
         ligne.append(format_note(moyenne_annuelle))
         donnees.append(ligne)
-
     total = 0.0
     n = 0
     for trimestre in trimestres:
-        m = moyenne_finale_eleve_trimestre(
-            int(etudiant['id'] if not USE_SQLALCHEMY else etudiant.id),
-            int(etudiant['classe_id'] if not USE_SQLALCHEMY else etudiant.classe_id),
-            int(trimestre['id'] if not USE_SQLALCHEMY else trimestre.id)
-        )
+        m = moyenne_finale_eleve_trimestre(etudiant.id, etudiant.classe_id, trimestre.id)
         if m is not None:
             total += m
             n += 1
     if n > 0:
         ligne_finale = ['MOYENNE FINALE ANNUELLE'] + ['' for _ in trimestres] + [format_note(total / n)]
         donnees.append(ligne_finale)
-
-    pdf = creer_pdf_annuel(
-        'Relevé annuel',
-        f"Année : {classe['libelle'] if not USE_SQLALCHEMY else classe.annee.libelle} | Classe : {classe['nom']} | Élève : {etudiant['prenom'] if not USE_SQLALCHEMY else etudiant.prenom} {etudiant['nom'] if not USE_SQLALCHEMY else etudiant.nom}",
-        donnees,
-        len(trimestres) + 2,
-    )
+    pdf = creer_pdf_annuel('Relevé annuel', f"Année : {classe.annee.libelle} | Classe : {classe.nom} | Élève : {etudiant.prenom} {etudiant.nom}", donnees, len(trimestres) + 2)
     return send_file(pdf, as_attachment=False, download_name='releve_annuel_eleve.pdf', mimetype='application/pdf')
 
-
 # ==================== INITIALISATION ====================
 
-
-# ==================== INITIALISATION ====================
-
-def init_db():
-    """Initialise la base de données."""
-    if USE_SQLALCHEMY:
-        with app.app_context():
-            db.create_all()
-        print("Tables PostgreSQL créées avec succès.")
-    else:
-        initialiser_db()
-        print("Base SQLite initialisée avec succès.")
-
-# Initialiser la base au chargement du module
-init_db()
+with app.app_context():
+    db.create_all()
 
 # Pour le développement local uniquement
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
-
-
-
-
-
-
-
-
