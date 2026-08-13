@@ -22,6 +22,7 @@ db = SQLAlchemy(app)
 
 
 
+
 import os
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
@@ -32,7 +33,6 @@ def create_app():
     app = Flask(__name__)
 
     database_url = os.environ.get("DATABASE_URL")
-
     if database_url and database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql://", 1)
 
@@ -41,14 +41,18 @@ def create_app():
 
     db.init_app(app)
 
-@app.route("/")
+    @app.route("/")
     def home():
-        return "App OK"
+        return "OK"
 
     return app
 
 app = create_app()
 
+
+
+
+ 
 
 
 
